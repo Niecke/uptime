@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 	"sync"
+	"context"
 )
 
 type healthResult struct {
@@ -41,7 +42,7 @@ func main() {
 
 	for msg := range data{
 		if msg.err != nil {
-			fmt.Printf("%v\n X Error (%v)\n", msg.url, msg.err)
+			fmt.Printf("%v\n X Error (%v)\n | Status: %v\n | Duration: %v\n", msg.url, msg.err, msg.statusCode, msg.duration)
 		} else if msg.statusCode >= 200 && msg.statusCode <= 299 {
 			fmt.Printf("%v\n | Status: %v\n | Duration: %v\n", msg.url, msg.statusCode, msg.duration)
 		} else {
@@ -52,8 +53,19 @@ func main() {
 }
 
 func runGet(url string, data chan healthResult) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	
 	start := time.Now()
-	resp, err := http.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		t := healthResult{url: url, statusCode: -1, duration: time.Since(start), err: err}
+		data <- t
+		return
+	}
+	client := http.DefaultClient
+	resp, err := client.Do(req)
+
 	d := time.Since(start)
 
 	// handle total failure of request; no conneection could be established
