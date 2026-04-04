@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
@@ -11,15 +12,19 @@ import (
 	"niecke-it.de/uptime/internal/api"
 	"niecke-it.de/uptime/internal/db"
 	models "niecke-it.de/uptime/internal/models"
+	"niecke-it.de/uptime/internal/sse"
 )
 
 func main() {
 	fmt.Println("Starting the uptime checker...")
 
+	broadcaster := sse.NewBroadcaster()
+	go broadcaster.Run()
+
 	database := db.SetupDatabase()
 
 	fmt.Println("Starting the api...")
-	go api.SetupAPI(database)
+	go api.SetupAPI(database, broadcaster)
 	fmt.Println("Done")
 
 	var s []string
@@ -43,14 +48,14 @@ func main() {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
-	runChecks(s, database, endpointIDs)
+	runChecks(s, database, endpointIDs, broadcaster)
 
 	for range ticker.C {
-		runChecks(s, database, endpointIDs)
+		runChecks(s, database, endpointIDs, broadcaster)
 	}
 }
 
-func runChecks(urls []string, database *sql.DB, endpointIDs map[string]int64) {
+func runChecks(urls []string, database *sql.DB, endpointIDs map[string]int64, broadcaster sse.Broadcaster) {
 	fmt.Printf("##########################################################################\n\n")
 	fmt.Printf("Check run: %v\n\n", time.Now().Format(time.TimeOnly))
 
@@ -72,6 +77,23 @@ func runChecks(urls []string, database *sql.DB, endpointIDs map[string]int64) {
 		if err := db.InsertCheckResult(database, endpointIDs[msg.URL], msg); err != nil {
 			fmt.Printf("Failed to store result for %v: %v\n", msg.URL, err)
 		}
+
+		errMsg := ""
+		if msg.Err != nil {
+			errMsg = msg.Err.Error()
+		}
+		event := models.SSEEvent{
+			URL:        msg.URL,
+			StatusCode: msg.StatusCode,
+			DurationMs: msg.Duration.Milliseconds(),
+			Error:      errMsg,
+		}
+		b, err := json.Marshal(event)
+		if err != nil {
+			fmt.Printf("Erro while json proccesing %v", err)
+		}
+
+		broadcaster.Broadcast <- string(b)
 
 		if msg.Err != nil {
 			fmt.Printf("%v\n X Error (%v)\n | Status: %v\n | Duration: %v\n", msg.URL, msg.Err, msg.StatusCode, msg.Duration)

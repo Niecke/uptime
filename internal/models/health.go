@@ -3,8 +3,8 @@ package models
 import "time"
 
 type HealthResult struct {
-	URL        string
-	StatusCode int
-	Duration   time.Duration
-	Err        error
+	URL        string        `json:"url"`
+	StatusCode int           `json:"status_code"`
+	Duration   time.Duration `json:"duration_ms"`
+	Err        error         `json:"err,omitempty"`
 }

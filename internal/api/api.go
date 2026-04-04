@@ -10,14 +10,16 @@ import (
 	"github.com/go-chi/chi/v5"
 	"niecke-it.de/uptime/internal/db"
 	"niecke-it.de/uptime/internal/models"
+	"niecke-it.de/uptime/internal/sse"
 )
 
 type APIHandler struct {
-	database *sql.DB
+	database    *sql.DB
+	broadcaster sse.Broadcaster
 }
 
-func SetupAPI(database *sql.DB) {
-	h := APIHandler{database: database}
+func SetupAPI(database *sql.DB, broadcaster sse.Broadcaster) {
+	h := APIHandler{database: database, broadcaster: broadcaster}
 	r := chi.NewRouter()
 
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
@@ -25,6 +27,7 @@ func SetupAPI(database *sql.DB) {
 	})
 
 	r.Mount("/endpoints", endpointRouter(&h))
+	r.Mount("/events", eventRouter(&h))
 
 	err := http.ListenAndServe(":3333", r)
 	if err != nil {
@@ -75,4 +78,36 @@ func (h *APIHandler) historyEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(endpointHistory)
+}
+
+func eventRouter(h *APIHandler) chi.Router {
+	r := chi.NewRouter()
+
+	r.Get("/", h.event)
+
+	return r
+}
+
+func (h *APIHandler) event(w http.ResponseWriter, r *http.Request) {
+	client := make(chan string)
+
+	h.broadcaster.Register <- client
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	for {
+		select {
+		case event := <-client:
+			// process event
+			fmt.Fprintf(w, "data: %s\n\n", event)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		case <-r.Context().Done():
+			h.broadcaster.Unregister <- client
+			return
+		}
+	}
 }
