@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"os"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -18,7 +19,12 @@ var embedMigrations embed.FS
 
 func SetupDatabase() *sql.DB {
 	// TODO: rewrite the panics and return the error instead
-	db, err := sql.Open("sqlite", "uptime.db")
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "uptime.db"
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		panic(err)
 	}
