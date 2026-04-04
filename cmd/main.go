@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"niecke-it.de/uptime/internal/api"
 	"niecke-it.de/uptime/internal/db"
 	models "niecke-it.de/uptime/internal/models"
 )
@@ -16,6 +17,10 @@ func main() {
 	fmt.Println("Starting the uptime checker...")
 
 	database := db.SetupDatabase()
+
+	fmt.Println("Starting the api...")
+	go api.SetupAPI(database)
+	fmt.Println("Done")
 
 	var s []string
 	s = make([]string, 4)
