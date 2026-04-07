@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/cors"
 	"niecke-it.de/uptime/internal/db"
 	"niecke-it.de/uptime/internal/models"
 	"niecke-it.de/uptime/internal/sse"
@@ -22,8 +23,14 @@ func SetupAPI(database *sql.DB, broadcaster sse.Broadcaster) {
 	h := APIHandler{database: database, broadcaster: broadcaster}
 	r := chi.NewRouter()
 
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Uptime checker"))
+	// TODO: CORS is disabled for now
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins: []string{"*"},
+		AllowedMethods: []string{"GET"},
+	}))
+
+	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+		http.FileServer(http.Dir("./web")).ServeHTTP(w, r)
 	})
 
 	r.Mount("/endpoints", endpointRouter(&h))

@@ -29,6 +29,10 @@ func SetupDatabase() *sql.DB {
 		panic(err)
 	}
 
+	// ensure SQLite does not produce any locking issues
+	db.Exec("PRAGMA journal_mode=WAL")
+	db.SetMaxOpenConns(1)
+
 	goose.SetBaseFS(embedMigrations)
 
 	if err := goose.SetDialect("sqlite3"); err != nil {
