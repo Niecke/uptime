@@ -29,12 +29,12 @@ func SetupAPI(database *sql.DB, broadcaster sse.Broadcaster) {
 		AllowedMethods: []string{"GET"},
 	}))
 
-	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		http.FileServer(http.Dir("./web")).ServeHTTP(w, r)
-	})
-
 	r.Mount("/endpoints", endpointRouter(&h))
 	r.Mount("/events", eventRouter(&h))
+
+	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+		http.StripPrefix("/", http.FileServer(http.Dir("./web"))).ServeHTTP(w, r)
+	})
 
 	err := http.ListenAndServe(":3333", r)
 	if err != nil {

@@ -22,7 +22,7 @@ button {
 .theme-toggle {
     background-color: var(--color-bg);
     border-radius: 8px;
-    border: 1px solid var(--color-text);
+    border: 3px solid var(--color-text);
     font-size: 14px;
     padding: 3px 8px;
 }

@@ -4,12 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
 	"niecke-it.de/uptime/internal/api"
+	"niecke-it.de/uptime/internal/config"
 	"niecke-it.de/uptime/internal/db"
 	models "niecke-it.de/uptime/internal/models"
 	"niecke-it.de/uptime/internal/sse"
@@ -17,6 +20,14 @@ import (
 
 func main() {
 	fmt.Println("Starting the uptime checker...")
+
+	configPtr := flag.String("config", "", "The path of the config file.")
+	flag.Parse()
+	cfg, err := config.LoadConfig(*configPtr)
+	if err != nil {
+		fmt.Println(err.Error())
+		os.Exit(1)
+	}
 
 	broadcaster := sse.NewBroadcaster()
 	go broadcaster.Run()
@@ -27,17 +38,9 @@ func main() {
 	go api.SetupAPI(database, broadcaster)
 	fmt.Println("Done")
 
-	var s []string
-	s = make([]string, 4)
-
-	s[0] = "https://niecke-it.de"
-	s[1] = "https://google.com"
-	s[2] = "https://i-dont-exists.local"
-	s[3] = "https://lumios-app.niecke-it.de/test"
-
 	endpointIDs := map[string]int64{}
 
-	for _, url := range s {
+	for _, url := range cfg.Endpoints {
 		id, err := db.InsertEndpoint(database, url)
 		if err != nil {
 			fmt.Printf("URL %v could not be stored in the db and will be skipped.", url)
@@ -45,26 +48,26 @@ func main() {
 		endpointIDs[url] = id
 	}
 
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(time.Duration(cfg.Global.IntervalSeconds) * time.Second)
 	defer ticker.Stop()
 
-	runChecks(s, database, endpointIDs, broadcaster)
+	runChecks(cfg, database, endpointIDs, broadcaster)
 
 	for range ticker.C {
-		runChecks(s, database, endpointIDs, broadcaster)
+		runChecks(cfg, database, endpointIDs, broadcaster)
 	}
 }
 
-func runChecks(urls []string, database *sql.DB, endpointIDs map[string]int64, broadcaster sse.Broadcaster) {
+func runChecks(cfg models.Config, database *sql.DB, endpointIDs map[string]int64, broadcaster sse.Broadcaster) {
 	fmt.Printf("##########################################################################\n\n")
 	fmt.Printf("Check run: %v\n\n", time.Now().Format(time.TimeOnly))
 
 	var wg sync.WaitGroup
 	data := make(chan models.HealthResult)
 
-	for _, url := range urls {
+	for _, url := range cfg.Endpoints {
 		wg.Go(func() {
-			runGet(url, data)
+			runGet(url, data, cfg.Global.TimeoutSeconds)
 		})
 	}
 
@@ -106,8 +109,8 @@ func runChecks(urls []string, database *sql.DB, endpointIDs map[string]int64, br
 
 }
 
-func runGet(url string, data chan models.HealthResult) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+func runGet(url string, data chan models.HealthResult, timeout int) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	defer cancel()
 
 	start := time.Now()

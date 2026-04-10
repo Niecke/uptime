@@ -12,5 +12,7 @@ FROM gcr.io/distroless/static-debian13
 ENV DB_PATH=/data/uptime.db
 
 COPY --from=build /src/uptime /uptime
+COPY --from=build /src/web /web
+COPY ./config.yml.example /config.yml
 
 CMD ["/uptime"]

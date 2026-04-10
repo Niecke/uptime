@@ -1,0 +1,6 @@
+global:
+  timeout_seconds: 1
+  interval_seconds: 30
+
+endpoints:
+  - https://google.com

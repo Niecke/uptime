@@ -13,3 +13,15 @@ export PATH=$PATH:/usr/local/go/bin
 # reload bash profile
 source ~/.bash_profile
 ```
+
+## Docker/Podman
+
+```
+podman build -t uptime .
+
+# with default config
+podman run -it -v ./data:/data:Z -p 3333:3333 uptime:latest
+
+# with custom config
+podman run -it -v ./data:/data:Z -v ./config.yml:/config.yml:z -p 3333:3333 uptime:latest
+```
