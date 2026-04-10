@@ -2,8 +2,10 @@ package api
 
 import (
 	"database/sql"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"strconv"
 
@@ -13,6 +15,9 @@ import (
 	"niecke-it.de/uptime/internal/models"
 	"niecke-it.de/uptime/internal/sse"
 )
+
+//go:embed web
+var webFiles embed.FS
 
 type APIHandler struct {
 	database    *sql.DB
@@ -32,8 +37,9 @@ func SetupAPI(database *sql.DB, broadcaster sse.Broadcaster) {
 	r.Mount("/endpoints", endpointRouter(&h))
 	r.Mount("/events", eventRouter(&h))
 
+	subFS, _ := fs.Sub(webFiles, "web")
 	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		http.StripPrefix("/", http.FileServer(http.Dir("./web"))).ServeHTTP(w, r)
+		http.FileServer(http.FS(subFS)).ServeHTTP(w, r)
 	})
 
 	err := http.ListenAndServe(":3333", r)
