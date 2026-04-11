@@ -1,0 +1,3 @@
+uptime.niecke-it.de {
+    reverse_proxy uptime:3333
+}

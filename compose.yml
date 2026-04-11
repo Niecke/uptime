@@ -1,0 +1,25 @@
+services:
+  uptime:
+    image: europe-west3-docker.pkg.dev/niecke-it/niecke-it/uptime:latest
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+      - ./config.yml:/config.yml
+    expose:
+      - "3333"
+
+  caddy:
+    image: caddy:latest
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
