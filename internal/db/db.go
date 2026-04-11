@@ -18,13 +18,15 @@ import (
 var embedMigrations embed.FS
 
 func SetupDatabase() *sql.DB {
-	// TODO: rewrite the panics and return the error instead
 	dbPath := os.Getenv("DB_PATH")
 	if dbPath == "" {
 		dbPath = "uptime.db"
 	}
+	return SetupDatabaseWithPath(dbPath)
+}
 
-	db, err := sql.Open("sqlite", dbPath)
+func SetupDatabaseWithPath(path string) *sql.DB {
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		panic(err)
 	}
