@@ -120,12 +120,14 @@ function createHistoryBar(buckets) {
     // build SVG — each hour is one rect
     // total width 100%, height 28px
     // totalHours rects with small gaps between them
-    const rectWidth = 100 / totalHours  // percentage width of each bar
-    const gap = 0.2              // small gap between bars
+    const rectWidth = 100 / totalHours; // percentage width of each bar
+    const gap = 0.2;              // small gap between bars
 
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('width', '100%');
     svg.setAttribute('height', '100%');
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', `Uptime history`);
 
 
     hours.forEach((key, index) => {
