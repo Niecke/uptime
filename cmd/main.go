@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"sync"
@@ -33,6 +34,7 @@ func main() {
 	go broadcaster.Run()
 
 	database := db.SetupDatabase()
+	go db.CompactDatabase(database)
 
 	fmt.Println("Starting the api...")
 	go api.SetupAPI(database, broadcaster)
@@ -116,24 +118,29 @@ func runGet(url string, data chan models.HealthResult, timeout int) {
 	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		t := models.HealthResult{URL: url, StatusCode: -1, Duration: time.Since(start), Err: err}
-		data <- t
+		data <- models.HealthResult{URL: url, StatusCode: -1, Duration: time.Since(start), Err: err}
 		return
 	}
-	client := http.DefaultClient
-	resp, err := client.Do(req)
 
+	client := &http.Client{
+		Timeout: time.Duration(timeout) * time.Second,
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+		},
+	}
+
+	resp, err := client.Do(req)
 	d := time.Since(start)
 
-	// handle total failure of request; no conneection could be established
 	if err != nil {
-		t := models.HealthResult{URL: url, StatusCode: 0, Duration: d, Err: err}
-		data <- t
+		data <- models.HealthResult{URL: url, StatusCode: 0, Duration: d, Err: err}
 		return
 	}
 
-	defer resp.Body.Close()
+	defer func() {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
 
-	t := models.HealthResult{URL: url, StatusCode: resp.StatusCode, Duration: d, Err: nil}
-	data <- t
+	data <- models.HealthResult{URL: url, StatusCode: resp.StatusCode, Duration: d, Err: nil}
 }

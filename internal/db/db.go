@@ -48,6 +48,19 @@ func SetupDatabaseWithPath(path string) *sql.DB {
 	return db
 }
 
+func CompactDatabase(database *sql.DB) {
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if _, err := database.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+			fmt.Printf("WAL checkpoint failed: %v", err)
+		} else {
+			fmt.Printf("WAL checkpoint completed")
+		}
+	}
+}
+
 func InsertEndpoint(db *sql.DB, url string) (int64, error) {
 	var endpointID int64
 	resultNew, err := db.Exec("INSERT OR IGNORE INTO endpoints (url) VALUES (?)", url)
