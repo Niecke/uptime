@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"flag"
@@ -36,6 +35,15 @@ func main() {
 	database := db.SetupDatabase()
 	go db.CompactDatabase(database)
 
+	// setup http client
+	httpClient := &http.Client{
+		Timeout: time.Duration(cfg.Global.TimeoutSeconds) * time.Second,
+		Transport: &http.Transport{
+			IdleConnTimeout:     90 * time.Second,
+			TLSHandshakeTimeout: 10 * time.Second,
+		},
+	}
+
 	fmt.Println("Starting the api...")
 	go api.SetupAPI(database, broadcaster)
 	fmt.Println("Done")
@@ -53,14 +61,14 @@ func main() {
 	ticker := time.NewTicker(time.Duration(cfg.Global.IntervalSeconds) * time.Second)
 	defer ticker.Stop()
 
-	runChecks(cfg, database, endpointIDs, broadcaster)
+	runChecks(cfg, database, endpointIDs, broadcaster, httpClient)
 
 	for range ticker.C {
-		runChecks(cfg, database, endpointIDs, broadcaster)
+		runChecks(cfg, database, endpointIDs, broadcaster, httpClient)
 	}
 }
 
-func runChecks(cfg models.Config, database *sql.DB, endpointIDs map[string]int64, broadcaster sse.Broadcaster) {
+func runChecks(cfg models.Config, database *sql.DB, endpointIDs map[string]int64, broadcaster sse.Broadcaster, httpClient *http.Client) {
 	fmt.Printf("##########################################################################\n\n")
 	fmt.Printf("Check run: %v\n\n", time.Now().Format(time.TimeOnly))
 
@@ -69,7 +77,7 @@ func runChecks(cfg models.Config, database *sql.DB, endpointIDs map[string]int64
 
 	for _, url := range cfg.Endpoints {
 		wg.Go(func() {
-			runGet(url, data, cfg.Global.TimeoutSeconds)
+			runGet(url, data, httpClient)
 		})
 	}
 
@@ -111,25 +119,15 @@ func runChecks(cfg models.Config, database *sql.DB, endpointIDs map[string]int64
 
 }
 
-func runGet(url string, data chan models.HealthResult, timeout int) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
-	defer cancel()
-
+func runGet(url string, data chan models.HealthResult, httpClient *http.Client) {
 	start := time.Now()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		data <- models.HealthResult{URL: url, StatusCode: -1, Duration: time.Since(start), Err: err}
 		return
 	}
 
-	client := &http.Client{
-		Timeout: time.Duration(timeout) * time.Second,
-		Transport: &http.Transport{
-			DisableKeepAlives: true,
-		},
-	}
-
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	d := time.Since(start)
 
 	if err != nil {
