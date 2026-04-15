@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -90,12 +91,26 @@ func InsertCheckResult(db *sql.DB, endpointID int64, result models.HealthResult)
 	if result.Err != nil {
 		errorString = result.Err.Error()
 	}
-	_, err := db.Exec(`INSERT INTO check_results (endpoint_id, checked_at, status_code, duration_ms, err) 
-		VALUES (?, ?, ?, ?, ?)`,
+
+	// TODO: refactor?
+	var headersValue any
+	if len(result.Headers) > 0 {
+		b, err := json.Marshal(result.Headers)
+		if err != nil {
+			return fmt.Errorf("marshal headers: %w", err)
+		}
+		headersValue = string(b)
+	} else {
+		headersValue = nil // store SQL NULL, not "{}" or ""
+	}
+
+	_, err := db.Exec(`INSERT INTO check_results (endpoint_id, checked_at, status_code, duration_ms, headers, err) 
+		VALUES (?, ?, ?, ?, ?, ?)`,
 		endpointID,
 		time.Now().UTC().Format("2006-01-02 15:04:05"),
 		result.StatusCode,
 		result.Duration.Milliseconds(),
+		headersValue,
 		errorString,
 	)
 

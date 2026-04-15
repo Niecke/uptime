@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -66,6 +67,31 @@ func main() {
 	for range ticker.C {
 		runChecks(cfg, database, endpointIDs, broadcaster, httpClient)
 	}
+}
+
+var capturedHeaders = []string{
+	"cf-cache-status",
+	"cf-ray",
+	"server-timing",
+	"age",
+	"server",
+}
+
+func extractHeaders(h http.Header) (map[string]string, error) {
+	captured := make(map[string]string, len(capturedHeaders))
+	if h == nil {
+		return captured, nil
+	}
+	for _, name := range capturedHeaders {
+		if v := h.Get(name); v != "" {
+			captured[strings.ToLower(name)] = v
+		}
+	}
+	if len(captured) == 0 {
+		return captured, nil
+	}
+
+	return captured, nil
 }
 
 func runChecks(cfg models.Config, database *sql.DB, endpointIDs map[string]int64, broadcaster sse.Broadcaster, httpClient *http.Client) {
@@ -130,8 +156,19 @@ func runGet(url string, data chan models.HealthResult, httpClient *http.Client) 
 	resp, err := httpClient.Do(req)
 	d := time.Since(start)
 
+	headersJSON := map[string]string{}
+	var hErr error
+	if resp != nil {
+		headersJSON, hErr = extractHeaders(resp.Header)
+		if hErr != nil {
+			fmt.Printf("header extraction failed for endpoint %v: %v", url, hErr)
+		} else {
+			fmt.Printf("header extracted for %v: %v", url, headersJSON)
+		}
+	}
+
 	if err != nil {
-		data <- models.HealthResult{URL: url, StatusCode: 0, Duration: d, Err: err}
+		data <- models.HealthResult{URL: url, StatusCode: 0, Duration: d, Headers: headersJSON, Err: err}
 		return
 	}
 
@@ -140,5 +177,5 @@ func runGet(url string, data chan models.HealthResult, httpClient *http.Client) 
 		resp.Body.Close()
 	}()
 
-	data <- models.HealthResult{URL: url, StatusCode: resp.StatusCode, Duration: d, Err: nil}
+	data <- models.HealthResult{URL: url, StatusCode: resp.StatusCode, Duration: d, Headers: headersJSON, Err: nil}
 }
