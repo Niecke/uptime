@@ -178,12 +178,14 @@ func HistoryEndpoints(db *sql.DB, endpointID int64) (models.EndpointHistory, err
 		return endpointHistory, err
 	}
 
+	// TODO: add history lenght as api param
+	retentionDays := "-5 days"
 	resultHistory, err := db.Query(`
 		SELECT cr.status_code, cr.checked_at, cr.duration_ms
 		FROM check_results cr
 		WHERE cr.endpoint_id = ?
-			AND cr.checked_at > datetime('now', '-5 days')
-	`, endpointID)
+			AND cr.checked_at > datetime('now', ?)
+	`, endpointID, retentionDays)
 
 	if err != nil {
 		fmt.Printf("Error while fetching endpoint data %v", err.Error())
