@@ -148,6 +148,13 @@ span.duration {
     min-width: 60px;
 }
 
+.uptime-percentage {
+    margin-top: 4px;
+    text-align: center;
+    font-size: small;
+    font-style: italic;
+}
+
 @keyframes pulse-green {
     0% {
         box-shadow: 0 0 0 0 rgba(76, 175, 136, 0.6);

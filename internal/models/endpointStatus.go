@@ -8,11 +8,12 @@ import (
 var ErrNotFound = errors.New("not found")
 
 type EndpointStatus struct {
-	ID         int64     `json:"id"`
-	URL        string    `json:"url"`
-	StatusCode int       `json:"status_code"`
-	CheckedAt  time.Time `json:"checked_at"`
-	Duration   int64     `json:"duration_ms"`
+	ID               int64     `json:"id"`
+	URL              string    `json:"url"`
+	StatusCode       int       `json:"status_code"`
+	CheckedAt        time.Time `json:"checked_at"`
+	Duration         int64     `json:"duration_ms"`
+	UptimePercentage float32   `json:"uptime"`
 }
 
 type EndpointHistoryEntry struct {

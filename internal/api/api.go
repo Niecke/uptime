@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
@@ -37,9 +38,19 @@ func SetupAPI(database *sql.DB, broadcaster sse.Broadcaster) {
 	r.Mount("/endpoints", endpointRouter(&h))
 	r.Mount("/events", eventRouter(&h))
 
-	subFS, _ := fs.Sub(webFiles, "web")
+	// TODO: move to config setup
+	var devMode = os.Getenv("DEV") == "true"
+
+	var fileSystem http.FileSystem
+	if devMode {
+		fileSystem = http.Dir("internal/api/web")
+	} else {
+		subFS, _ := fs.Sub(webFiles, "web")
+		fileSystem = http.FS(subFS)
+	}
+
 	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		http.FileServer(http.FS(subFS)).ServeHTTP(w, r)
+		http.FileServer(fileSystem).ServeHTTP(w, r)
 	})
 
 	err := http.ListenAndServe(":3333", r)

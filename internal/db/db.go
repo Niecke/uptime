@@ -123,7 +123,11 @@ func InsertCheckResult(db *sql.DB, endpointID int64, result models.HealthResult)
 
 func ListEndpoints(db *sql.DB) ([]models.EndpointStatus, error) {
 	result, err := db.Query(`
-		SELECT e.id, e.url, cr.status_code, cr.checked_at, cr.duration_ms
+		SELECT 
+			e.id, e.url, 
+			cr.status_code, cr.checked_at, cr.duration_ms,
+			(SELECT COUNT(*) FROM check_results WHERE endpoint_id = e.id AND status_code >= 200 AND status_code < 400) success,
+			(SELECT COUNT(*) FROM check_results WHERE endpoint_id = e.id) total
 		FROM endpoints e
 		INNER JOIN check_results cr ON e.id = cr.endpoint_id
 		WHERE (e.id, cr.checked_at) IN (
@@ -132,7 +136,6 @@ func ListEndpoints(db *sql.DB) ([]models.EndpointStatus, error) {
 			GROUP BY endpoint_id
 		)
 		ORDER BY e.id
-		
 	`)
 
 	if err != nil {
@@ -144,11 +147,15 @@ func ListEndpoints(db *sql.DB) ([]models.EndpointStatus, error) {
 
 	var s []models.EndpointStatus
 	for result.Next() {
+		var success int64
+		var total int64
 		var t models.EndpointStatus
-		if err := result.Scan(&t.ID, &t.URL, &t.StatusCode, &t.CheckedAt, &t.Duration); err != nil {
+		if err := result.Scan(&t.ID, &t.URL, &t.StatusCode, &t.CheckedAt, &t.Duration, &success, &total); err != nil {
 			fmt.Printf("Error while processing endpoint list %v", err.Error())
 			return nil, err
 		}
+		uptime := float32(success) / float32(total)
+		t.UptimePercentage = uptime
 		s = append(s, t)
 	}
 	return s, nil

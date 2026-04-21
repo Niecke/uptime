@@ -19,7 +19,7 @@ while (main.lastElementChild) {
     main.removeChild(main.lastElementChild);
 }
 
-function createCard(url, statusCode, durationMs, checkedAt, historyBarSVG) {
+function createCard(url, statusCode, durationMs, checkedAt, historyBarSVG, uptime) {
     let card = document.createElement("section");
     card.className = "endpoint-card";
     card.dataset.url = url;
@@ -68,6 +68,11 @@ function createCard(url, statusCode, durationMs, checkedAt, historyBarSVG) {
     historyBar.appendChild(historyBarSVG);
     card.appendChild(historyBar);
 
+    let uptimePercentage = document.createElement("div");
+    uptimePercentage.className = "uptime-percentage";
+    uptimePercentage.textContent = "Uptime: " + (100 * uptime).toFixed(2) + "%";
+    card.appendChild(uptimePercentage);
+
     return card;
 }
 
@@ -83,7 +88,8 @@ async function loadEndpoints() {
                 endpoint.status_code,
                 endpoint.duration_ms,
                 endpoint.checked_at,
-                svg
+                svg,
+                endpoint.uptime,
             ))
         }
 
