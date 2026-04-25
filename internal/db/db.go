@@ -50,10 +50,28 @@ func SetupDatabaseWithPath(path string) *sql.DB {
 }
 
 func CompactDatabase(database *sql.DB) {
+	// TODO: add history lenght as api param
+	retentionDays := "-1 days"
 	ticker := time.NewTicker(30 * time.Minute)
 	defer ticker.Stop()
 
 	for range ticker.C {
+		// first delete old records
+		if res, err := database.Exec(`
+			DELETE FROM check_results
+			WHERE checked_at < datetime('now', ?)
+			`, retentionDays); err != nil {
+
+			fmt.Printf("Error while deleting old records: %v", err)
+		} else {
+			if deletedRecords, err := res.RowsAffected(); err != nil {
+				fmt.Printf("Error while getting delete records count: %v", err)
+			} else {
+				fmt.Printf("Deleted %v old records from check_results.", deletedRecords)
+			}
+		}
+
+		// second run truncation
 		if _, err := database.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 			fmt.Printf("WAL checkpoint failed: %v", err)
 		} else {
@@ -123,7 +141,7 @@ func InsertCheckResult(db *sql.DB, endpointID int64, result models.HealthResult)
 
 func ListEndpoints(db *sql.DB) ([]models.EndpointStatus, error) {
 	// TODO: add history lenght as api param
-	retentionDays := "-5 days"
+	lookbackDays := "-5 days"
 	result, err := db.Query(`
 		SELECT 
 			e.id, e.url, 
@@ -138,7 +156,7 @@ func ListEndpoints(db *sql.DB) ([]models.EndpointStatus, error) {
 			GROUP BY endpoint_id
 		)
 		ORDER BY e.id
-	`, retentionDays, retentionDays)
+	`, lookbackDays, lookbackDays)
 
 	if err != nil {
 		fmt.Printf("Error while fetching endpoint list %v", err.Error())
@@ -181,13 +199,13 @@ func HistoryEndpoints(db *sql.DB, endpointID int64) (models.EndpointHistory, err
 	}
 
 	// TODO: add history lenght as api param
-	retentionDays := "-5 days"
+	lookbackDays := "-5 days"
 	resultHistory, err := db.Query(`
 		SELECT cr.status_code, cr.checked_at, cr.duration_ms
 		FROM check_results cr
 		WHERE cr.endpoint_id = ?
 			AND cr.checked_at > datetime('now', ?)
-	`, endpointID, retentionDays)
+	`, endpointID, lookbackDays)
 
 	if err != nil {
 		fmt.Printf("Error while fetching endpoint data %v", err.Error())
