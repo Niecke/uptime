@@ -122,12 +122,14 @@ func InsertCheckResult(db *sql.DB, endpointID int64, result models.HealthResult)
 }
 
 func ListEndpoints(db *sql.DB) ([]models.EndpointStatus, error) {
+	// TODO: add history lenght as api param
+	retentionDays := "-5 days"
 	result, err := db.Query(`
 		SELECT 
 			e.id, e.url, 
 			cr.status_code, cr.checked_at, cr.duration_ms,
-			(SELECT COUNT(*) FROM check_results WHERE endpoint_id = e.id AND status_code >= 200 AND status_code < 400) success,
-			(SELECT COUNT(*) FROM check_results WHERE endpoint_id = e.id) total
+			(SELECT COUNT(*) FROM check_results WHERE endpoint_id = e.id AND status_code >= 200 AND status_code < 400 AND checked_at > datetime('now', ?)) success,
+			(SELECT COUNT(*) FROM check_results WHERE endpoint_id = e.id AND checked_at > datetime('now', ?)) total
 		FROM endpoints e
 		INNER JOIN check_results cr ON e.id = cr.endpoint_id
 		WHERE (e.id, cr.checked_at) IN (
@@ -136,7 +138,7 @@ func ListEndpoints(db *sql.DB) ([]models.EndpointStatus, error) {
 			GROUP BY endpoint_id
 		)
 		ORDER BY e.id
-	`)
+	`, retentionDays, retentionDays)
 
 	if err != nil {
 		fmt.Printf("Error while fetching endpoint list %v", err.Error())
