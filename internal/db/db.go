@@ -51,7 +51,7 @@ func SetupDatabaseWithPath(path string) *sql.DB {
 
 func CompactDatabase(database *sql.DB) {
 	// TODO: add history lenght as api param
-	retentionDays := "-1 days"
+	retentionDays := "-7 days"
 	ticker := time.NewTicker(30 * time.Minute)
 	defer ticker.Stop()
 
