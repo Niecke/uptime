@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Rounded square background -->
+  <rect x="0" y="0" width="32" height="32" rx="7" fill="#1A1814"/>
+  <!-- Heartbeat / monitor pulse line -->
+  <path d="M 4 16 L 10 16 L 12 11 L 15 21 L 18 8 L 21 16 L 28 16"
+        fill="none" stroke="#22c55e" stroke-width="2.2"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
