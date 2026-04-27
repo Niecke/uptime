@@ -38,9 +38,12 @@ function createCard(url, statusCode, durationMs, checkedAt, historyBarSVG, uptim
     statusDot.className = "status-dot " + status;
     header.appendChild(statusDot);
 
-    let endpointURL = document.createElement("span");
+    let endpointURL = document.createElement("a");
     endpointURL.className = "endpoint-url";
+    endpointURL.title = url;
+    endpointURL.href = url;
     endpointURL.textContent = url;
+    endpointURL.target = "_blank";
     header.appendChild(endpointURL);
 
     let endpointMeta = document.createElement("div");

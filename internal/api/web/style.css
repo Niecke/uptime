@@ -88,6 +88,11 @@ header {
 .endpoint-url {
     font-weight: bold;
     font-size: 15px;
+    font-family: monospace;
+    color: inherit;
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+    text-decoration-color: color-mix(in srgb, var(--color-text) 40%, transparent);
 }
 
 .status-dot {
