@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
-	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -26,6 +26,8 @@ type APIHandler struct {
 }
 
 func SetupAPI(database *sql.DB, broadcaster sse.Broadcaster) {
+	slog.Info("Starting the api...")
+
 	h := APIHandler{database: database, broadcaster: broadcaster}
 	r := chi.NewRouter()
 
@@ -55,8 +57,9 @@ func SetupAPI(database *sql.DB, broadcaster sse.Broadcaster) {
 
 	err := http.ListenAndServe(":3333", r)
 	if err != nil {
-		fmt.Printf("There was an error starting the api: %v", err.Error())
+		slog.Error("There was an error starting the api", "error", err.Error())
 	}
+	slog.Info("API started")
 }
 
 func endpointRouter(h *APIHandler) chi.Router {
@@ -72,7 +75,7 @@ func endpointRouter(h *APIHandler) chi.Router {
 func (h *APIHandler) listEndpoints(w http.ResponseWriter, r *http.Request) {
 	endpoints, err := db.ListEndpoints(h.database)
 	if err != nil {
-		fmt.Printf("There was a db error: %v", err.Error())
+		slog.Error("There was a db error", "error", err.Error())
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -84,7 +87,7 @@ func (h *APIHandler) listEndpoints(w http.ResponseWriter, r *http.Request) {
 func (h *APIHandler) historyEndpoint(w http.ResponseWriter, r *http.Request) {
 	endpointId, err := strconv.Atoi(chi.URLParam(r, "endpointId"))
 	if err != nil {
-		fmt.Printf("There was a param parsing error: %v", err.Error())
+		slog.Error("There was a param parsing error", "error", err.Error())
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -95,7 +98,7 @@ func (h *APIHandler) historyEndpoint(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "endpoint id unkown", http.StatusNotFound)
 			return
 		}
-		fmt.Printf("There was a db error: %v", err.Error())
+		slog.Error("There was a db error", "error", err.Error())
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -125,7 +128,7 @@ func (h *APIHandler) event(w http.ResponseWriter, r *http.Request) {
 		select {
 		case event := <-client:
 			// process event
-			fmt.Fprintf(w, "data: %s\n\n", event)
+			slog.Debug("sending data via sse", "event", event)
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}

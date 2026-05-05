@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -15,20 +15,25 @@ import (
 	"niecke-it.de/uptime/internal/api"
 	"niecke-it.de/uptime/internal/config"
 	"niecke-it.de/uptime/internal/db"
+	"niecke-it.de/uptime/internal/logging"
 	models "niecke-it.de/uptime/internal/models"
 	"niecke-it.de/uptime/internal/sse"
 )
 
 func main() {
-	fmt.Println("Starting the uptime checker...")
+	slog.SetDefault(logging.New("info"))
+	slog.Info("Starting the uptime checker...")
 
 	configPtr := flag.String("config", "", "The path of the config file.")
 	flag.Parse()
 	cfg, err := config.LoadConfig(*configPtr)
 	if err != nil {
-		fmt.Println(err.Error())
+		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
+
+	// logging can be fully setup once the config is loaded
+	slog.SetDefault(logging.New(cfg.Global.LogLevel))
 
 	broadcaster := sse.NewBroadcaster()
 	go broadcaster.Run()
@@ -45,16 +50,14 @@ func main() {
 		},
 	}
 
-	fmt.Println("Starting the api...")
 	go api.SetupAPI(database, broadcaster)
-	fmt.Println("Done")
 
 	endpointIDs := map[string]int64{}
 
 	for _, url := range cfg.Endpoints {
 		id, err := db.InsertEndpoint(database, url)
 		if err != nil {
-			fmt.Printf("URL %v could not be stored in the db and will be skipped.", url)
+			slog.Error("URL could not be stored in the db and will be skipped.", "url", url)
 		}
 		endpointIDs[url] = id
 	}
@@ -95,8 +98,7 @@ func extractHeaders(h http.Header) (map[string]string, error) {
 }
 
 func runChecks(cfg models.Config, database *sql.DB, endpointIDs map[string]int64, broadcaster sse.Broadcaster, httpClient *http.Client) {
-	fmt.Printf("##########################################################################\n\n")
-	fmt.Printf("Check run: %v\n\n", time.Now().Format(time.TimeOnly))
+	slog.Debug("check run")
 
 	var wg sync.WaitGroup
 	data := make(chan models.HealthResult)
@@ -114,7 +116,7 @@ func runChecks(cfg models.Config, database *sql.DB, endpointIDs map[string]int64
 
 	for msg := range data {
 		if err := db.InsertCheckResult(database, endpointIDs[msg.URL], msg); err != nil {
-			fmt.Printf("Failed to store result for %v: %v\n", msg.URL, err)
+			slog.Error("Failed to store result", "url", msg.URL, "error", err)
 		}
 
 		errMsg := ""
@@ -129,17 +131,15 @@ func runChecks(cfg models.Config, database *sql.DB, endpointIDs map[string]int64
 		}
 		b, err := json.Marshal(event)
 		if err != nil {
-			fmt.Printf("Erro while json proccesing %v", err)
+			slog.Error("Erro while json proccesing", "err", err)
 		}
 
 		broadcaster.Broadcast <- string(b)
 
 		if msg.Err != nil {
-			fmt.Printf("%v\n X Error (%v)\n | Status: %v\n | Duration: %v\n", msg.URL, msg.Err, msg.StatusCode, msg.Duration)
-		} else if msg.StatusCode >= 200 && msg.StatusCode <= 299 {
-			fmt.Printf("%v\n | Status: %v\n | Duration: %v\n", msg.URL, msg.StatusCode, msg.Duration)
+			slog.Info("result processed", "url", msg.URL, "error", msg.Err, "status_code", msg.StatusCode, "duration", msg.Duration)
 		} else {
-			fmt.Printf("%v\n X Status: %v -> ERROR\n | Duration: %v\n", msg.URL, msg.StatusCode, msg.Duration)
+			slog.Info("result processed", "url", msg.URL, "status_code", msg.StatusCode, "duration", msg.Duration)
 		}
 	}
 
@@ -161,9 +161,9 @@ func runGet(url string, data chan models.HealthResult, httpClient *http.Client) 
 	if resp != nil {
 		headersJSON, hErr = extractHeaders(resp.Header)
 		if hErr != nil {
-			fmt.Printf("header extraction failed for endpoint %v: %v", url, hErr)
+			slog.Error("header extraction failed", "url", url, "error", hErr)
 		} else {
-			fmt.Printf("header extracted for %v: %v", url, headersJSON)
+			slog.Debug("header extracted", "url", url, "header", headersJSON)
 		}
 	}
 

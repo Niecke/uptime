@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -62,20 +63,20 @@ func CompactDatabase(database *sql.DB) {
 			WHERE checked_at < datetime('now', ?)
 			`, retentionDays); err != nil {
 
-			fmt.Printf("Error while deleting old records: %v", err)
+			slog.Error("Error while deleting old records", "error", err)
 		} else {
 			if deletedRecords, err := res.RowsAffected(); err != nil {
-				fmt.Printf("Error while getting delete records count: %v", err)
+				slog.Error("Error while getting delete records count", "error", err)
 			} else {
-				fmt.Printf("Deleted %v old records from check_results.", deletedRecords)
+				slog.Info("Deleted old records from check_results", "count", deletedRecords)
 			}
 		}
 
 		// second run truncation
 		if _, err := database.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
-			fmt.Printf("WAL checkpoint failed: %v", err)
+			slog.Error("WAL checkpoint failed", "error", err)
 		} else {
-			fmt.Printf("WAL checkpoint completed")
+			slog.Error("WAL checkpoint completed")
 		}
 	}
 }
@@ -159,7 +160,7 @@ func ListEndpoints(db *sql.DB) ([]models.EndpointStatus, error) {
 	`, lookbackDays, lookbackDays)
 
 	if err != nil {
-		fmt.Printf("Error while fetching endpoint list %v", err.Error())
+		slog.Error("Error while fetching endpoint list", "error", err.Error())
 		return nil, err
 	}
 
@@ -171,7 +172,7 @@ func ListEndpoints(db *sql.DB) ([]models.EndpointStatus, error) {
 		var total int64
 		var t models.EndpointStatus
 		if err := result.Scan(&t.ID, &t.URL, &t.StatusCode, &t.CheckedAt, &t.Duration, &success, &total); err != nil {
-			fmt.Printf("Error while processing endpoint list %v", err.Error())
+			slog.Error("Error while processing endpoint list", "error", err.Error())
 			return nil, err
 		}
 		uptime := float32(success) / float32(total)
@@ -191,10 +192,10 @@ func HistoryEndpoints(db *sql.DB, endpointID int64) (models.EndpointHistory, err
 
 	if err := result.Scan(&endpointHistory.ID, &endpointHistory.URL); err != nil {
 		if err == sql.ErrNoRows {
-			fmt.Printf("Unkown endpoint id: %v", endpointID)
+			slog.Error("Unkown endpoint id", "endpoint_id", endpointID)
 			return endpointHistory, models.ErrNotFound
 		}
-		fmt.Printf("Error while processing endpoint data %v", err)
+		slog.Error("Error while processing endpoint data", "error", err)
 		return endpointHistory, err
 	}
 
@@ -208,7 +209,7 @@ func HistoryEndpoints(db *sql.DB, endpointID int64) (models.EndpointHistory, err
 	`, endpointID, lookbackDays)
 
 	if err != nil {
-		fmt.Printf("Error while fetching endpoint data %v", err.Error())
+		slog.Error("Error while fetching endpoint data", "error", err.Error())
 		return endpointHistory, err
 	}
 	defer resultHistory.Close()
@@ -217,7 +218,7 @@ func HistoryEndpoints(db *sql.DB, endpointID int64) (models.EndpointHistory, err
 	for resultHistory.Next() {
 		var e models.EndpointHistoryEntry
 		if err := resultHistory.Scan(&e.StatusCode, &e.CheckedAt, &e.Duration); err != nil {
-			fmt.Printf("Error while processing endpoint history %v", err.Error())
+			slog.Error("Error while processing endpoint history", "error", err.Error())
 			return endpointHistory, err
 		}
 		endpointHistory.History = append(endpointHistory.History, e)

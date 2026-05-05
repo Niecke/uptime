@@ -6,6 +6,7 @@ type Config struct {
 }
 
 type GlobalConfig struct {
-	TimeoutSeconds  int `yaml:"timeout_seconds"`
-	IntervalSeconds int `yaml:"interval_seconds"`
+	TimeoutSeconds  int    `yaml:"timeout_seconds"`
+	IntervalSeconds int    `yaml:"interval_seconds"`
+	LogLevel        string `yaml:"log_level"`
 }

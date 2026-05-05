@@ -1,6 +1,7 @@
 global:
   timeout_seconds: 1
   interval_seconds: 30
+  log_level: info
 
 endpoints:
   - https://google.com

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -15,7 +16,7 @@ func LoadConfig(path string) (models.Config, error) {
 		return conf, err
 	}
 
-	fmt.Printf("Loading config from %v\n", path)
+	slog.Info("Loading config", "path", path)
 	file, err := os.ReadFile(path)
 	if err != nil {
 		return conf, fmt.Errorf("Error opening file %v", path)
