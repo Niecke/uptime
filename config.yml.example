@@ -2,6 +2,7 @@ global:
   timeout_seconds: 1
   interval_seconds: 30
   log_level: info
+  retention_days: 30
 
 endpoints:
   - https://google.com

@@ -31,6 +31,9 @@ func LoadConfig(path string) (models.Config, error) {
 	if conf.Global.IntervalSeconds == 0 {
 		return conf, fmt.Errorf("global.interval_seconds must be set")
 	}
+	if conf.Global.RetentionDays == 0 {
+		conf.Global.RetentionDays = 30
+	}
 	return conf, nil
 }
 

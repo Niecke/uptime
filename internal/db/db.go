@@ -50,9 +50,8 @@ func SetupDatabaseWithPath(path string) *sql.DB {
 	return db
 }
 
-func CompactDatabase(database *sql.DB) {
-	// TODO: add history lenght as api param
-	retentionDays := "-7 days"
+func CompactDatabase(database *sql.DB, retentionDays int) {
+	retentionDaysString := fmt.Sprintf("-%d days", retentionDays)
 	ticker := time.NewTicker(30 * time.Minute)
 	defer ticker.Stop()
 
@@ -61,7 +60,7 @@ func CompactDatabase(database *sql.DB) {
 		if res, err := database.Exec(`
 			DELETE FROM check_results
 			WHERE checked_at < datetime('now', ?)
-			`, retentionDays); err != nil {
+			`, retentionDaysString); err != nil {
 
 			slog.Error("Error while deleting old records", "error", err)
 		} else {
@@ -140,9 +139,9 @@ func InsertCheckResult(db *sql.DB, endpointID int64, result models.HealthResult)
 	return nil
 }
 
-func ListEndpoints(db *sql.DB) ([]models.EndpointStatus, error) {
-	// TODO: add history lenght as api param
-	lookbackDays := "-5 days"
+func ListEndpoints(db *sql.DB, retentionDays int) ([]models.EndpointStatus, error) {
+	retentionDaysString := fmt.Sprintf("-%d days", retentionDays)
+	slog.Debug("ListEndpoints called", "retentionDays", retentionDays, "retentionDaysString", retentionDaysString)
 	result, err := db.Query(`
 		SELECT 
 			e.id, e.url, 
@@ -157,7 +156,7 @@ func ListEndpoints(db *sql.DB) ([]models.EndpointStatus, error) {
 			GROUP BY endpoint_id
 		)
 		ORDER BY e.id
-	`, lookbackDays, lookbackDays)
+	`, retentionDaysString, retentionDaysString)
 
 	if err != nil {
 		slog.Error("Error while fetching endpoint list", "error", err.Error())

@@ -39,7 +39,7 @@ func main() {
 	go broadcaster.Run()
 
 	database := db.SetupDatabase()
-	go db.CompactDatabase(database)
+	go db.CompactDatabase(database, cfg.Global.RetentionDays)
 
 	// setup http client
 	httpClient := &http.Client{
@@ -50,7 +50,7 @@ func main() {
 		},
 	}
 
-	go api.SetupAPI(database, broadcaster)
+	go api.SetupAPI(database, broadcaster, cfg)
 
 	endpointIDs := map[string]int64{}
 

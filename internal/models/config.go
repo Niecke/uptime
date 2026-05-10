@@ -9,4 +9,5 @@ type GlobalConfig struct {
 	TimeoutSeconds  int    `yaml:"timeout_seconds"`
 	IntervalSeconds int    `yaml:"interval_seconds"`
 	LogLevel        string `yaml:"log_level"`
+	RetentionDays   int    `yaml:"retention_days"`
 }

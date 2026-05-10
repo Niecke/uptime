@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"niecke-it.de/uptime/internal/db"
 	"niecke-it.de/uptime/internal/models"
@@ -23,12 +25,11 @@ var webFiles embed.FS
 type APIHandler struct {
 	database    *sql.DB
 	broadcaster sse.Broadcaster
+	config      models.Config
 }
 
-func SetupAPI(database *sql.DB, broadcaster sse.Broadcaster) {
-	slog.Info("Starting the api...")
-
-	h := APIHandler{database: database, broadcaster: broadcaster}
+func SetupAPI(database *sql.DB, broadcaster sse.Broadcaster, config models.Config) {
+	h := APIHandler{database: database, broadcaster: broadcaster, config: config}
 	r := chi.NewRouter()
 
 	// TODO: CORS is disabled for now
@@ -36,6 +37,7 @@ func SetupAPI(database *sql.DB, broadcaster sse.Broadcaster) {
 		AllowedOrigins: []string{"*"},
 		AllowedMethods: []string{"GET"},
 	}))
+	r.Use(slogLogger)
 
 	r.Mount("/endpoints", endpointRouter(&h))
 	r.Mount("/events", eventRouter(&h))
@@ -55,11 +57,11 @@ func SetupAPI(database *sql.DB, broadcaster sse.Broadcaster) {
 		http.FileServer(fileSystem).ServeHTTP(w, r)
 	})
 
+	slog.Info("API started on http://0.0.0.0:3333")
 	err := http.ListenAndServe(":3333", r)
 	if err != nil {
 		slog.Error("There was an error starting the api", "error", err.Error())
 	}
-	slog.Info("API started")
 }
 
 func endpointRouter(h *APIHandler) chi.Router {
@@ -73,7 +75,7 @@ func endpointRouter(h *APIHandler) chi.Router {
 }
 
 func (h *APIHandler) listEndpoints(w http.ResponseWriter, r *http.Request) {
-	endpoints, err := db.ListEndpoints(h.database)
+	endpoints, err := db.ListEndpoints(h.database, h.config.Global.RetentionDays)
 	if err != nil {
 		slog.Error("There was a db error", "error", err.Error())
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -105,6 +107,20 @@ func (h *APIHandler) historyEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(endpointHistory)
+}
+
+func slogLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		start := time.Now()
+		next.ServeHTTP(ww, r)
+		slog.Info("request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", ww.Status(),
+			"duration_ms", time.Since(start).Milliseconds(),
+		)
+	})
 }
 
 func eventRouter(h *APIHandler) chi.Router {
