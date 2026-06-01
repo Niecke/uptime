@@ -4,5 +4,11 @@ global:
   log_level: info
   retention_days: 30
 
+alerting:
+  - type: slack
+    threshold: 3
+    address: https://hooks.slack.com/services/XXX/YYY/ZZZ
+
+
 endpoints:
   - https://google.com

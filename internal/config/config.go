@@ -34,6 +34,11 @@ func LoadConfig(path string) (models.Config, error) {
 	if conf.Global.RetentionDays == 0 {
 		conf.Global.RetentionDays = 30
 	}
+	for i := range conf.Alertings {
+		if conf.Alertings[i].Threshold == 0 {
+			conf.Alertings[i].Threshold = 3
+		}
+	}
 	return conf, nil
 }
 
