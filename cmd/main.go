@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"niecke-it.de/uptime/internal/alerting"
 	"niecke-it.de/uptime/internal/api"
 	"niecke-it.de/uptime/internal/config"
 	"niecke-it.de/uptime/internal/db"
@@ -37,6 +38,15 @@ func main() {
 
 	broadcaster := sse.NewBroadcaster()
 	go broadcaster.Run()
+
+	// setup the notification if any alert is defined
+	if cfg.Alertings != nil {
+		slog.Debug("alerting config", "config", cfg.Alertings)
+		// TODO: setup alerting
+		go alerting.SetupNotifier(broadcaster, cfg)
+	} else {
+		slog.Info("No alerts defined, skipping alerting setup.")
+	}
 
 	database := db.SetupDatabase()
 	go db.CompactDatabase(database, cfg.Global.RetentionDays)
