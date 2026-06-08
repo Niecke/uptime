@@ -15,6 +15,6 @@ type GlobalConfig struct {
 
 type AlertingConfig struct {
 	Type      string `yaml:"type"`
-	Threshold int    `yaml:"threshold"`
+	Threshold uint8  `yaml:"threshold"`
 	Address   string `yaml:"address"`
 }

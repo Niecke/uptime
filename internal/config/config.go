@@ -3,10 +3,16 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 
 	"gopkg.in/yaml.v3"
 	"niecke-it.de/uptime/internal/models"
+)
+
+const (
+	defaultThreshold = 3
+	maxThreshold     = math.MaxUint8 // 255
 )
 
 func LoadConfig(path string) (models.Config, error) {
@@ -34,9 +40,15 @@ func LoadConfig(path string) (models.Config, error) {
 	if conf.Global.RetentionDays == 0 {
 		conf.Global.RetentionDays = 30
 	}
+	// threshold default = 3
+	// threshold max = 255 (uint8)
 	for i := range conf.Alertings {
 		if conf.Alertings[i].Threshold == 0 {
-			conf.Alertings[i].Threshold = 3
+			conf.Alertings[i].Threshold = defaultThreshold
+		}
+		if conf.Alertings[i].Threshold > maxThreshold {
+			slog.Warn("Threshold exceeds max. Capping.", "threshold", conf.Alertings[i].Threshold, "max_threshold", maxThreshold, "type", conf.Alertings[i].Type)
+			conf.Alertings[i].Threshold = maxThreshold
 		}
 	}
 	return conf, nil
