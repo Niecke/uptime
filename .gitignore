@@ -31,7 +31,11 @@ go.work.sum
 # .idea/
 # .vscode/
 
-*.db*
+*.db
+*.db-shm
+*.db-wal
 plan.html
-uptime
 config.yml
+
+code-review*.md
+code-review*.json
