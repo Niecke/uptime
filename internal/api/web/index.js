@@ -18,12 +18,11 @@ const colorMap = {
  * Provide the git_hash from backend
  */
 
-const version = document.querySelector("#version");
+const versionObj = document.querySelector("#version");
 try {
     const response = await fetch("/version");
     const response_json = await response.json();
-    const git_hash = await response_json.git_hash;
-    version.textContent = git_hash;
+    versionObj.textContent = `${response_json.version} (${response_json.git_hash})`;
 } catch (err) {
     console.error("Failed to load version.", err);
 }
@@ -87,7 +86,7 @@ function createCard(url, statusCode, durationMs, checkedAt, historyBarSVG, uptim
 
     let uptimePercentage = document.createElement("div");
     uptimePercentage.className = "uptime-percentage";
-    uptimePercentage.textContent = "Uptime: " + (100 * uptime).toFixed(2) + "%";
+    uptimePercentage.textContent = `Uptime:${(100 * uptime).toFixed(2)}%`;
     card.appendChild(uptimePercentage);
 
     return card;

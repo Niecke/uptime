@@ -32,3 +32,11 @@ When running with DEV=true, the HTML content is reloaded from disk.
 ```bash
 DEV=true go run cmd/main.go -config=./config.yml
 ```
+
+## Release
+
+A new release is created by adding a tag to the main branch. 
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
