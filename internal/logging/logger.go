@@ -20,8 +20,8 @@ func New(levelStr string) *slog.Logger {
 		Level: level,
 	})
 
-	// git_hash is attached here so every log record carries it by default
-	return slog.New(handler).With("git_hash", version.GitHash)
+	// version and git_hash are attached here so every log record carries them by default
+	return slog.New(handler).With("version", version.Version, "git_hash", version.GitHash)
 }
 
 func parseLevel(s string) (slog.Level, error) {

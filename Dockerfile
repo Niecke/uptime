@@ -1,6 +1,7 @@
 FROM golang:1.26.4-alpine3.22 AS build
 
 ARG BUILD_GIT_HASH="unknown"
+ARG BUILD_VERSION="dev"
 
 RUN mkdir /src
 WORKDIR /src
@@ -11,7 +12,9 @@ RUN go mod download
 
 COPY ./ /src
 RUN CGO_ENABLED=0 go build -o uptime \
-    -ldflags="-w -s -X 'niecke-it.de/uptime/internal/version.GitHash=${BUILD_GIT_HASH}'" \
+    -ldflags="-w -s \
+      -X 'niecke-it.de/uptime/internal/version.GitHash=${BUILD_GIT_HASH}' \
+      -X 'niecke-it.de/uptime/internal/version.Version=${BUILD_VERSION}'" \
     cmd/main.go
 
 # distroless has no shell, so create /data here and copy it into the final image
