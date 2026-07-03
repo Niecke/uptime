@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker europe-west3-docker.pkg.dev
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Compute version tags
+        id: v
+        run: |
+          V="${GITHUB_REF_NAME#v}"          # v1.2.3 -> 1.2.3
+          echo "full=$V"        >> "$GITHUB_OUTPUT"
+          echo "minor=${V%.*}"  >> "$GITHUB_OUTPUT"   # 1.2
+          echo "major=${V%%.*}" >> "$GITHUB_OUTPUT"   # 1
+
+      - name: Build and push
+        env:
+          GAR: europe-west3-docker.pkg.dev/niecke-it/niecke-it/uptime
+          HUB: docker.io/niecke11/uptime
+        run: |
+          docker build \
+            --build-arg BUILD_GIT_HASH="$(git rev-parse --short HEAD)" \
+            --build-arg BUILD_VERSION="${{ steps.v.outputs.full }}" \
+            -t "$GAR:${{ steps.v.outputs.full }}"  -t "$HUB:${{ steps.v.outputs.full }}" \
+            -t "$GAR:${{ steps.v.outputs.minor }}" -t "$HUB:${{ steps.v.outputs.minor }}" \
+            -t "$GAR:${{ steps.v.outputs.major }}" -t "$HUB:${{ steps.v.outputs.major }}" \
+            -t "$GAR:latest" -t "$HUB:latest" .
+          docker push --all-tags "$GAR"
+          docker push --all-tags "$HUB"

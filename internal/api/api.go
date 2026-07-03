@@ -79,8 +79,9 @@ func endpointRouter(h *APIHandler) chi.Router {
 func (h *APIHandler) version(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(struct {
+		Version string `json:"version"`
 		GitHash string `json:"git_hash"`
-	}{GitHash: version.GitHash})
+	}{Version: version.Version, GitHash: version.GitHash})
 }
 
 func (h *APIHandler) listEndpoints(w http.ResponseWriter, r *http.Request) {
