@@ -25,7 +25,8 @@ jobs:
 
       - name: Build and push
         run: |
-          docker build -t europe-west3-docker.pkg.dev/niecke-it/niecke-it/uptime:latest \
+          docker build --build-arg BUILD_GIT_HASH="$(git rev-parse --short HEAD)" \
+                       -t europe-west3-docker.pkg.dev/niecke-it/niecke-it/uptime:latest \
                        -t europe-west3-docker.pkg.dev/niecke-it/niecke-it/uptime:${{ github.sha }} .
           docker push europe-west3-docker.pkg.dev/niecke-it/niecke-it/uptime:latest
           docker push europe-west3-docker.pkg.dev/niecke-it/niecke-it/uptime:${{ github.sha }}
