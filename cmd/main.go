@@ -141,7 +141,7 @@ func runChecks(cfg models.Config, database *sql.DB, endpointIDs map[string]int64
 		}
 		b, err := json.Marshal(event)
 		if err != nil {
-			slog.Error("Erro while json proccesing", "err", err)
+			slog.Error("Erro while JSON proccesing", "err", err)
 		}
 
 		broadcaster.Broadcast <- string(b)

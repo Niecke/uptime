@@ -10,7 +10,7 @@ import (
 )
 
 // thresholds are stored in a map where the url is the key
-// value an object to keep track of failed requests and if the alert already triggerd
+// value an object to keep track of failed requests and if the alert already triggered
 // once there is a success the count should be set to zero and fired to false
 type NotifyHandler struct {
 	broadcaster  sse.Broadcaster
@@ -48,16 +48,14 @@ func SetupNotifier(broadcaster sse.Broadcaster, cfg models.Config) {
 				h.alertStorage[event.URL].count++
 			}
 
-			t := false
 			for _, a := range cfg.Alertings {
 				if h.alertStorage[event.URL].count >= a.Threshold && !h.alertStorage[event.URL].fired {
 					if a.Type == "slack" {
 						Notify(a.Address, event.URL, event.StatusCode, event.Error, a.Threshold)
-						t = true
+						h.alertStorage[event.URL].fired = true
 					}
 				}
 			}
-			h.alertStorage[event.URL].fired = t
 		} else {
 			// reset count to zero
 			if h.alertStorage[event.URL].count != 0 {
