@@ -34,7 +34,10 @@ func SetupNotifier(broadcaster sse.Broadcaster, cfg models.Config) {
 
 	for e := range client {
 		var event models.SSEEvent
-		json.Unmarshal([]byte(e), &event)
+		if err := json.Unmarshal([]byte(e), &event); err != nil {
+			slog.Error("failed to unmarshal event", "error", err)
+			continue
+		}
 
 		if h.alertStorage[event.URL] == nil {
 			h.alertStorage[event.URL] = &alertObject{}
