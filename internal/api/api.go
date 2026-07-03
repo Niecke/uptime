@@ -17,6 +17,7 @@ import (
 	"niecke-it.de/uptime/internal/db"
 	"niecke-it.de/uptime/internal/models"
 	"niecke-it.de/uptime/internal/sse"
+	"niecke-it.de/uptime/internal/version"
 )
 
 //go:embed web
@@ -41,6 +42,7 @@ func SetupAPI(database *sql.DB, broadcaster sse.Broadcaster, config models.Confi
 
 	r.Mount("/endpoints", endpointRouter(&h))
 	r.Mount("/events", eventRouter(&h))
+	r.Get("/version", h.version)
 
 	// TODO: move to config setup
 	var devMode = os.Getenv("DEV") == "true"
@@ -72,6 +74,13 @@ func endpointRouter(h *APIHandler) chi.Router {
 	r.Get("/{endpointId}/history", h.historyEndpoint)
 
 	return r
+}
+
+func (h *APIHandler) version(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		GitHash string `json:"git_hash"`
+	}{GitHash: version.GitHash})
 }
 
 func (h *APIHandler) listEndpoints(w http.ResponseWriter, r *http.Request) {

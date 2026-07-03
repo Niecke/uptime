@@ -14,7 +14,21 @@ const colorMap = {
     grey: 'var(--color-unknown)'
 }
 
-const main = document.querySelector("main");
+/*
+ * Provide the git_hash from backend
+ */
+
+const version = document.querySelector("#version");
+try {
+    const response = await fetch("/version");
+    const response_json = await response.json();
+    const git_hash = await response_json.git_hash;
+    version.textContent = git_hash;
+} catch (err) {
+    console.error("Failed to load version.", err);
+}
+
+const main = document.querySelector("#main");
 while (main.lastElementChild) {
     main.removeChild(main.lastElementChild);
 }
