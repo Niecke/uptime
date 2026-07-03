@@ -59,7 +59,7 @@ func findConfigPath(flagPath string) (string, error) {
 		return flagPath, nil
 	}
 
-	candidates := []string{"./config.yml", "/data/config.yml"}
+	candidates := []string{"./config.yml", "/config.yml", "/data/config.yml"}
 	for _, path := range candidates {
 		if _, err := os.Stat(path); err == nil {
 			return path, nil
