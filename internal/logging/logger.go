@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+
+	"niecke-it.de/uptime/internal/version"
 )
 
 func New(levelStr string) *slog.Logger {
@@ -18,7 +20,8 @@ func New(levelStr string) *slog.Logger {
 		Level: level,
 	})
 
-	return slog.New(handler)
+	// git_hash is attached here so every log record carries it by default
+	return slog.New(handler).With("git_hash", version.GitHash)
 }
 
 func parseLevel(s string) (slog.Level, error) {
