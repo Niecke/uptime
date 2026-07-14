@@ -1,9 +1,9 @@
 services:
   uptime:
-    image: europe-west3-docker.pkg.dev/niecke-it/niecke-it/uptime:latest
+    image: niecke11/uptime:latest
     restart: unless-stopped
     volumes:
-      - ./data:/data
+      - ./data:/data:z
       - ./config.yml:/config.yml
     expose:
       - "3333"

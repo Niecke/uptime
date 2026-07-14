@@ -18,13 +18,13 @@ RUN CGO_ENABLED=0 go build -o uptime \
     cmd/main.go
 
 # distroless has no shell, so create /data here and copy it into the final image
-RUN mkdir /data
+RUN mkdir /data && chown -R 65532:65532 /data
 
 FROM gcr.io/distroless/static-debian13:nonroot
 
 ENV DB_PATH=/data/uptime.db
 
-COPY --from=build /data /data
+COPY --from=build --chown=65532:65532 /data /data
 COPY --from=build /src/uptime /uptime
 COPY ./config.yml.example /config.yml
 
