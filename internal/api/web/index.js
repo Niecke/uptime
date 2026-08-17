@@ -97,17 +97,20 @@ async function loadEndpoints() {
         const response = await fetch("/endpoints")
         const endpoints = await response.json()
 
-        for (const endpoint of endpoints) {
-            const svg = await loadEndpointHistory(endpoint.id);
+        const svgs = await Promise.all(
+            endpoints.map(endpoint => loadEndpointHistory(endpoint.id))
+        )
+
+        endpoints.forEach((endpoint, i) => {
             main.appendChild(createCard(
                 endpoint.url,
                 endpoint.status_code,
                 endpoint.duration_ms,
                 endpoint.checked_at,
-                svg,
+                svgs[i],
                 endpoint.uptime,
             ))
-        }
+        })
 
     } catch (err) {
         console.error("Failed to load endpoints:", err)
@@ -175,7 +178,8 @@ async function loadEndpointHistory(endpointID) {
         const svg = createHistoryBar(buckets);
         return svg;
     } catch (err) {
-        console.error("Failed to load endpoints:", err)
+        console.error("Failed to load history:", err)
+        return createHistoryBar({}) // all-grey bar instead of undefined
     }
 }
 

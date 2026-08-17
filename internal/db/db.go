@@ -35,7 +35,8 @@ func SetupDatabaseWithPath(path string) *sql.DB {
 
 	// ensure SQLite does not produce any locking issues
 	db.Exec("PRAGMA journal_mode=WAL")
-	db.SetMaxOpenConns(1)
+	db.Exec("PRAGMA busy_timeout=5000") // wait rather than fail on lock contention
+	db.SetMaxOpenConns(4)
 
 	goose.SetBaseFS(embedMigrations)
 
