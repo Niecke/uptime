@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -142,7 +143,9 @@ func eventRouter(h *APIHandler) chi.Router {
 }
 
 func (h *APIHandler) event(w http.ResponseWriter, r *http.Request) {
-	client := make(chan string)
+	// buffered so a brief stall in this handler does not block the broadcaster,
+	// which sends to every client from a single goroutine
+	client := make(chan string, 8)
 
 	h.broadcaster.Register <- client
 
@@ -155,6 +158,9 @@ func (h *APIHandler) event(w http.ResponseWriter, r *http.Request) {
 		case event := <-client:
 			// process event
 			slog.Debug("sending data via sse", "event", event)
+			// event is single-line JSON from json.Marshal, so it needs no
+			// splitting across multiple data: lines
+			fmt.Fprintf(w, "data: %s\n\n", event)
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}

@@ -215,10 +215,15 @@ func HistoryEndpoints(tracingLog bool, db *sql.DB, endpointID int64) (models.End
 	lookbackDays := "-5 days"
 	tracing_start = time.Now()
 	resultHistory, err := db.Query(`
-		SELECT cr.status_code, cr.checked_at, cr.duration_ms
+		SELECT strftime('%Y-%m-%dT%H', cr.checked_at) AS hour,
+       		COUNT(*) AS total,
+       		SUM(CASE WHEN cr.status_code = 0 OR cr.status_code >= 400 THEN 1 ELSE 0 END) AS failures,
+       		CAST(AVG(cr.duration_ms) AS INTEGER) AS avg_duration_ms
 		FROM check_results cr
 		WHERE cr.endpoint_id = ?
 			AND cr.checked_at > datetime('now', ?)
+		GROUP BY hour
+		ORDER BY hour
 	`, endpointID, lookbackDays)
 	tracing_end = time.Now()
 	tracing_duration = tracing_end.Sub(tracing_start)
@@ -232,14 +237,14 @@ func HistoryEndpoints(tracingLog bool, db *sql.DB, endpointID int64) (models.End
 	}
 	defer resultHistory.Close()
 
-	endpointHistory.History = []models.EndpointHistoryEntry{}
+	endpointHistory.History = []models.EndpointHistoryBucket{}
 	for resultHistory.Next() {
-		var e models.EndpointHistoryEntry
-		if err := resultHistory.Scan(&e.StatusCode, &e.CheckedAt, &e.Duration); err != nil {
+		var b models.EndpointHistoryBucket
+		if err := resultHistory.Scan(&b.Hour, &b.Total, &b.Failures, &b.AvgDuration); err != nil {
 			slog.Error("Error while processing endpoint history", "error", err.Error())
 			return endpointHistory, err
 		}
-		endpointHistory.History = append(endpointHistory.History, e)
+		endpointHistory.History = append(endpointHistory.History, b)
 	}
 
 	return endpointHistory, nil

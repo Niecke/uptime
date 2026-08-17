@@ -117,28 +117,27 @@ async function loadEndpoints() {
     }
 }
 
-function bucketByHour(history) {
-    const buckets = Object.groupBy(history, (check) => check.checked_at.substring(0, 13));
-    return buckets;
-}
-
 function createHistoryBar(buckets) {
     const totalHours = 5 * 24
+    // backend already grouped by hour — index them for O(1) lookup per bar
+    const byHour = new Map(buckets.map(b => [b.hour, b]))
     const hours = []
     const now = new Date()
 
     // generate all totalHours hour keys, oldest first
+    // UTC throughout: the backend groups on UTC timestamps, and getHours/setHours
+    // would land on :30 boundaries in half-hour-offset timezones
     for (let i = totalHours - 1; i >= 0; i--) {
         const d = new Date(now)
-        d.setHours(d.getHours() - i, 0, 0, 0)
+        d.setUTCHours(d.getUTCHours() - i, 0, 0, 0)
         hours.push(d.toISOString().substring(0, 13))
     }
 
     // for each hour, pick a color
     const colors = hours.map(key => {
-        const checks = buckets[key]
-        if (!checks) return colorMap['grey']
-        if (checks.some(c => c.status_code === 0 || c.status_code >= 400)) return colorMap['red']
+        const bucket = byHour.get(key)
+        if (!bucket) return colorMap['grey']
+        if (bucket.failures > 0) return colorMap['red']
         return colorMap['green']
     })
 
@@ -174,12 +173,10 @@ async function loadEndpointHistory(endpointID) {
         const response = await fetch("/endpoints/" + endpointID + "/history")
         const endpointData = await response.json()
 
-        const buckets = bucketByHour(endpointData.history);
-        const svg = createHistoryBar(buckets);
-        return svg;
+        return createHistoryBar(endpointData.history);
     } catch (err) {
         console.error("Failed to load history:", err)
-        return createHistoryBar({}) // all-grey bar instead of undefined
+        return createHistoryBar([]) // all-grey bar instead of undefined
     }
 }
 

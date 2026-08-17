@@ -29,7 +29,13 @@ func (b *Broadcaster) Run() {
 		// process broadcast messages
 		case event := <-b.Broadcast:
 			for client := range b.clients {
-				client <- event
+				// non-blocking: a disconnected client stops reading its channel
+				// before Unregister is processed, and a blocking send there would
+				// wedge this loop — and with it every other client — permanently
+				select {
+				case client <- event:
+				default:
+				}
 			}
 		}
 	}
