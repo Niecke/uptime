@@ -1,0 +1,13 @@
+# Allowlist, not a denylist: exclude everything, then re-include only the files the
+# build actually needs. A new secret or artifact dropped in the repo root therefore
+# cannot reach the build context by default — it has to be added here on purpose.
+#
+# Without this, `COPY ./ /src` sweeps in the live config.yml (real Slack webhook),
+# uptime.db + WAL, and .git.
+*
+
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!config.yml.example

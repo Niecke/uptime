@@ -5,16 +5,42 @@ on:
   pull_request:
   workflow_call:
 
+# Least privilege. Without this the job inherits the repository default, which on many
+# repos is still read/write for the whole GITHUB_TOKEN. Nothing here needs to write.
+permissions:
+  contents: read
+
 jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      # Actions are pinned to a commit SHA, not a tag. Tags are mutable: whoever controls
+      # the action's repo can repoint v7 at new code and every consumer picks it up on the
+      # next run. The trailing comment is what Renovate reads to keep the pin updated.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Don't leave the GITHUB_TOKEN behind in .git/config, where any later step —
+          # or anything a build script pulls in — could read it.
+          persist-credentials: false
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
 
+      # Re-hashes every downloaded module and fails if it doesn't match go.sum.
+      - name: Verify module checksums
+        run: go mod verify
+
+      # Fails if go.mod/go.sum are out of sync with the imports — the state in which an
+      # unreviewed dependency could otherwise ride along unnoticed.
+      - name: Check go.mod is tidy
+        run: go mod tidy -diff
+
       - name: Run tests
         run: go test ./...
+
+      # Checks the dependency tree against the Go vulnerability database. Reports only
+      # vulnerabilities actually reachable from this module's code paths.
+      - name: Scan dependencies for known vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...

@@ -1,4 +1,6 @@
-FROM golang:1.26.4-alpine3.22 AS build
+# Base images are pinned by digest, not just by tag — a tag can be repointed at a
+# different image, a digest cannot. Renovate keeps these digests current.
+FROM golang:1.26.5-alpine3.24@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS build
 
 ARG BUILD_GIT_HASH="unknown"
 ARG BUILD_VERSION="dev"
@@ -8,10 +10,15 @@ WORKDIR /src
 
 # Copy dependency files first — this layer is cached until go.mod/go.sum change
 COPY go.mod go.sum ./
-RUN go mod download
+# go mod verify re-checks every downloaded module against the hashes in go.sum
+RUN go mod download && go mod verify
 
 COPY ./ /src
-RUN CGO_ENABLED=0 go build -o uptime \
+
+# -mod=readonly fails the build if go.mod/go.sum would have to change, so a dependency
+# can never be silently added or upgraded during an image build.
+# -trimpath keeps local filesystem paths out of the binary.
+RUN CGO_ENABLED=0 go build -mod=readonly -trimpath -o uptime \
     -ldflags="-w -s \
       -X 'niecke-it.de/uptime/internal/version.GitHash=${BUILD_GIT_HASH}' \
       -X 'niecke-it.de/uptime/internal/version.Version=${BUILD_VERSION}'" \
@@ -20,7 +27,7 @@ RUN CGO_ENABLED=0 go build -o uptime \
 # distroless has no shell, so create /data here and copy it into the final image
 RUN mkdir /data && chown -R 65532:65532 /data
 
-FROM gcr.io/distroless/static-debian13:nonroot
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:d29e660cc75a5b6b1334e03c5c81ccf9bc0884a002c6000dbf0fb96034814478
 
 ENV DB_PATH=/data/uptime.db
 

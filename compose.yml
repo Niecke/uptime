@@ -1,7 +1,14 @@
 services:
   uptime:
-    image: niecke11/uptime:latest
+    # Pinned by tag + digest. The tag documents the version for humans; the digest is
+    # what Docker actually enforces, so a repushed tag can't swap the image underneath us.
+    image: niecke11/uptime:0.1.3@sha256:131f681b6f15bbad938d7fd3e533be1869ded403de273aa0976a3ad7d40f2f3f
     restart: unless-stopped
+    # Static binary running as nonroot on a high port — it needs no capabilities at all.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - ./data:/data:z
       - ./config.yml:/config.yml
@@ -9,8 +16,10 @@ services:
       - "3333"
 
   caddy:
-    image: caddy:latest
+    image: caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     ports:
       - "80:80"
       - "443:443"
