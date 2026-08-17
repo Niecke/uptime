@@ -1,4 +1,8 @@
 uptime.niecke-it.de {
-    encode zstd gzip
+    encode zstd gzip {
+        match {
+            not path /events
+        }
+    }
     reverse_proxy uptime:3333
 }

@@ -19,6 +19,10 @@ import (
 //go:embed migrations/*.sql
 var embedMigrations embed.FS
 
+// Layout every checked_at is written with and read back by. Values are stored
+// as UTC text, so time.Parse yields UTC without an explicit location.
+const checkedAtLayout = "2006-01-02 15:04:05"
+
 func SetupDatabase() *sql.DB {
 	dbPath := os.Getenv("DB_PATH")
 	if dbPath == "" {
@@ -82,24 +86,16 @@ func CompactDatabase(database *sql.DB, retentionDays int) {
 }
 
 func InsertEndpoint(db *sql.DB, url string) (int64, error) {
+	if _, err := db.Exec("INSERT OR IGNORE INTO endpoints (url) VALUES (?)", url); err != nil {
+		return 0, err
+	}
+
+	// Always read the id back rather than trusting LastInsertId: when OR IGNORE
+	// skips the insert, LastInsertId still reports the connection's previous
+	// insert rowid, which would silently map this url onto another endpoint.
 	var endpointID int64
-	resultNew, err := db.Exec("INSERT OR IGNORE INTO endpoints (url) VALUES (?)", url)
-	if err != nil {
+	if err := db.QueryRow("SELECT id FROM endpoints WHERE url = ?", url).Scan(&endpointID); err != nil {
 		return 0, err
-	}
-
-	endpointID, err = resultNew.LastInsertId()
-	if err != nil {
-		return 0, err
-	}
-
-	if endpointID == 0 {
-		resultExisting := db.QueryRow("SELECT id FROM endpoints WHERE url = ?", url)
-
-		err := resultExisting.Scan(&endpointID)
-		if err != nil {
-			return 0, err
-		}
 	}
 
 	return endpointID, nil
@@ -126,7 +122,7 @@ func InsertCheckResult(db *sql.DB, endpointID int64, result models.HealthResult)
 	_, err := db.Exec(`INSERT INTO check_results (endpoint_id, checked_at, status_code, duration_ms, headers, err) 
 		VALUES (?, ?, ?, ?, ?, ?)`,
 		endpointID,
-		time.Now().UTC().Format("2006-01-02 15:04:05"),
+		time.Now().UTC().Format(checkedAtLayout),
 		result.StatusCode,
 		result.Duration.Milliseconds(),
 		headersValue,
@@ -145,20 +141,36 @@ func ListEndpoints(tracingLog bool, db *sql.DB, retentionDays int) ([]models.End
 	slog.Debug("ListEndpoints called", "retentionDays", retentionDays, "retentionDaysString", retentionDaysString)
 	tracing_start := time.Now()
 	result, err := db.Query(`
-		SELECT 
-			e.id, e.url, 
-			cr.status_code, cr.checked_at, cr.duration_ms,
-			(SELECT COUNT(*) FROM check_results WHERE endpoint_id = e.id AND status_code >= 200 AND status_code < 400 AND checked_at > datetime('now', ?)) success,
-			(SELECT COUNT(*) FROM check_results WHERE endpoint_id = e.id AND checked_at > datetime('now', ?)) total
-		FROM endpoints e
-		INNER JOIN check_results cr ON e.id = cr.endpoint_id
-		WHERE (e.id, cr.checked_at) IN (
-			SELECT endpoint_id, MAX(checked_at)
+		WITH latest AS (
+			-- one row per endpoint: SQLite takes the bare columns from the same
+			-- row that produced MAX(), so ties cannot fan out into duplicates
+			SELECT endpoint_id,
+			       MAX(checked_at) AS checked_at,
+			       status_code,
+			       duration_ms
 			FROM check_results
 			GROUP BY endpoint_id
+		),
+		stats AS (
+			SELECT endpoint_id,
+			       COUNT(*) AS total,
+			       SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN 1 ELSE 0 END) AS success
+			FROM check_results
+			WHERE checked_at > datetime('now', ?)
+			GROUP BY endpoint_id
 		)
+		SELECT e.id, e.url,
+		       COALESCE(l.status_code, 0),
+		       l.checked_at,
+		       COALESCE(l.duration_ms, 0),
+		       COALESCE(s.success, 0),
+		       COALESCE(s.total, 0)
+		FROM endpoints e
+		-- LEFT so a configured endpoint that has not been checked yet still shows up
+		LEFT JOIN latest l ON l.endpoint_id = e.id
+		LEFT JOIN stats  s ON s.endpoint_id = e.id
 		ORDER BY e.id
-	`, retentionDaysString, retentionDaysString)
+	`, retentionDaysString)
 
 	tracing_end := time.Now()
 	tracing_duration := tracing_end.Sub(tracing_start)
@@ -176,13 +188,28 @@ func ListEndpoints(tracingLog bool, db *sql.DB, retentionDays int) ([]models.End
 	for result.Next() {
 		var success int64
 		var total int64
+		// MAX(checked_at) comes out of the CTE without the column's declared
+		// DATETIME type, so the driver hands it over as a string and it has to
+		// be parsed here. NULL means the endpoint has never been checked.
+		var checkedAt sql.NullString
 		var t models.EndpointStatus
-		if err := result.Scan(&t.ID, &t.URL, &t.StatusCode, &t.CheckedAt, &t.Duration, &success, &total); err != nil {
+		if err := result.Scan(&t.ID, &t.URL, &t.StatusCode, &checkedAt, &t.Duration, &success, &total); err != nil {
 			slog.Error("Error while processing endpoint list", "error", err.Error())
 			return nil, err
 		}
-		uptime := float32(success) / float32(total)
-		t.UptimePercentage = uptime
+		if checkedAt.Valid {
+			parsed, err := time.Parse(checkedAtLayout, checkedAt.String)
+			if err != nil {
+				slog.Error("Unparsable checked_at", "endpoint_id", t.ID, "value", checkedAt.String, "error", err)
+			} else {
+				t.CheckedAt = parsed
+			}
+		}
+		// guard the division: an endpoint with no results in the retention window
+		// would otherwise yield NaN, which encoding/json refuses to marshal
+		if total > 0 {
+			t.UptimePercentage = float32(success) / float32(total)
+		}
 		s = append(s, t)
 	}
 	return s, nil
