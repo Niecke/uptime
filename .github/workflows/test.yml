@@ -17,7 +17,7 @@ jobs:
       # Actions are pinned to a commit SHA, not a tag. Tags are mutable: whoever controls
       # the action's repo can repoint v7 at new code and every consumer picks it up on the
       # next run. The trailing comment is what Renovate reads to keep the pin updated.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Don't leave the GITHUB_TOKEN behind in .git/config, where any later step —
           # or anything a build script pulls in — could read it.
