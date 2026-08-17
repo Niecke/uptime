@@ -85,7 +85,7 @@ func (h *APIHandler) version(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *APIHandler) listEndpoints(w http.ResponseWriter, r *http.Request) {
-	endpoints, err := db.ListEndpoints(h.database, h.config.Global.RetentionDays)
+	endpoints, err := db.ListEndpoints(h.config.Global.TracingLog, h.database, h.config.Global.RetentionDays)
 	if err != nil {
 		slog.Error("There was a db error", "error", err.Error())
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -104,7 +104,7 @@ func (h *APIHandler) historyEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	endpointHistory, err := db.HistoryEndpoints(h.database, int64(endpointId))
+	endpointHistory, err := db.HistoryEndpoints(h.config.Global.TracingLog, h.database, int64(endpointId))
 	if err != nil {
 		if err == models.ErrNotFound {
 			http.Error(w, "endpoint id unkown", http.StatusNotFound)

@@ -11,6 +11,7 @@ type GlobalConfig struct {
 	IntervalSeconds int    `yaml:"interval_seconds"`
 	LogLevel        string `yaml:"log_level"`
 	RetentionDays   int    `yaml:"retention_days"`
+	TracingLog      bool   `yaml:"tracing_log"`
 }
 
 type AlertingConfig struct {

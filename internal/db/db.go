@@ -139,9 +139,10 @@ func InsertCheckResult(db *sql.DB, endpointID int64, result models.HealthResult)
 	return nil
 }
 
-func ListEndpoints(db *sql.DB, retentionDays int) ([]models.EndpointStatus, error) {
+func ListEndpoints(tracingLog bool, db *sql.DB, retentionDays int) ([]models.EndpointStatus, error) {
 	retentionDaysString := fmt.Sprintf("-%d days", retentionDays)
 	slog.Debug("ListEndpoints called", "retentionDays", retentionDays, "retentionDaysString", retentionDaysString)
+	tracing_start := time.Now()
 	result, err := db.Query(`
 		SELECT 
 			e.id, e.url, 
@@ -158,6 +159,11 @@ func ListEndpoints(db *sql.DB, retentionDays int) ([]models.EndpointStatus, erro
 		ORDER BY e.id
 	`, retentionDaysString, retentionDaysString)
 
+	tracing_end := time.Now()
+	tracing_duration := tracing_end.Sub(tracing_start)
+	if tracingLog {
+		slog.Info("Tracing duration of the SQL.", "duration_ms", tracing_duration.Milliseconds(), "tracing_type", "sql", "command", "ListEndpoints")
+	}
 	if err != nil {
 		slog.Error("Error while fetching endpoint list", "error", err.Error())
 		return nil, err
@@ -181,13 +187,19 @@ func ListEndpoints(db *sql.DB, retentionDays int) ([]models.EndpointStatus, erro
 	return s, nil
 }
 
-func HistoryEndpoints(db *sql.DB, endpointID int64) (models.EndpointHistory, error) {
+func HistoryEndpoints(tracingLog bool, db *sql.DB, endpointID int64) (models.EndpointHistory, error) {
 	var endpointHistory models.EndpointHistory
+	tracing_start := time.Now()
 	result := db.QueryRow(`
 		SELECT e.id, e.url
 		FROM endpoints e
 		WHERE e.id = ?
 	`, endpointID)
+	tracing_end := time.Now()
+	tracing_duration := tracing_end.Sub(tracing_start)
+	if tracingLog {
+		slog.Info("Tracing duration of the SQL.", "duration_ms", tracing_duration.Milliseconds(), "tracing_type", "sql", "command", "HistoryEndpoints_1")
+	}
 
 	if err := result.Scan(&endpointHistory.ID, &endpointHistory.URL); err != nil {
 		if err == sql.ErrNoRows {
@@ -200,12 +212,18 @@ func HistoryEndpoints(db *sql.DB, endpointID int64) (models.EndpointHistory, err
 
 	// TODO: add history lenght as api param
 	lookbackDays := "-5 days"
+	tracing_start = time.Now()
 	resultHistory, err := db.Query(`
 		SELECT cr.status_code, cr.checked_at, cr.duration_ms
 		FROM check_results cr
 		WHERE cr.endpoint_id = ?
 			AND cr.checked_at > datetime('now', ?)
 	`, endpointID, lookbackDays)
+	tracing_end = time.Now()
+	tracing_duration = tracing_end.Sub(tracing_start)
+	if tracingLog {
+		slog.Info("Tracing duration of the SQL.", "duration_ms", tracing_duration.Milliseconds(), "tracing_type", "sql", "command", "HistoryEndpoints_2")
+	}
 
 	if err != nil {
 		slog.Error("Error while fetching endpoint data", "error", err.Error())
