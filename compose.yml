@@ -2,7 +2,7 @@ services:
   uptime:
     # Pinned by tag + digest. The tag documents the version for humans; the digest is
     # what Docker actually enforces, so a repushed tag can't swap the image underneath us.
-    image: niecke11/uptime:0.1.3@sha256:131f681b6f15bbad938d7fd3e533be1869ded403de273aa0976a3ad7d40f2f3f
+    image: niecke11/uptime:0.1.4@sha256:0f467119a7446c78eb2b50d87f7eadc036d1dfd3b10a95d23206a4f8dda9b95a
     restart: unless-stopped
     # Static binary running as nonroot on a high port — it needs no capabilities at all.
     cap_drop:
