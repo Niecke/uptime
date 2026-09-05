@@ -7,6 +7,10 @@ name: Test
 on:
   pull_request:
   workflow_call:
+    outputs:
+      code:
+        description: "Whether this change can alter the binary or the image."
+        value: ${{ jobs.changes.outputs.code }}
 
 # Least privilege. Without this the job inherits the repository default, which on many
 # repos is still read/write for the whole GITHUB_TOKEN. Nothing here needs to write.
@@ -14,7 +18,45 @@ permissions:
   contents: read
 
 jobs:
+  # Deliberately a job-level `if:` on the suite rather than a `paths:` filter on
+  # the trigger. A workflow skipped by path filtering never reports its checks,
+  # so a required check in the ruleset would sit pending and the pull request
+  # could never merge. A job skipped by `if:` reports a `skipped` conclusion,
+  # which satisfies it.
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Both ends of the range have to be in the clone to diff them.
+          fetch-depth: 0
+
+      - id: filter
+        env:
+          # For a pull request these are the two tips of the range; for a push
+          # they are the branch before and after. A manual run has neither, and
+          # the script falls back to running everything.
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          code="$(.github/scripts/code-changed.sh "$BASE" "$HEAD" "$EVENT")"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" = "true" ]; then
+            echo "Code or image inputs changed — running the suite." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Nothing that reaches the binary or the image changed — tests, builds and releases are skipped." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   tests:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       # Actions are pinned to a commit SHA, not a tag. Tags are mutable: whoever controls
