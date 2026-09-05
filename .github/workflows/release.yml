@@ -30,8 +30,12 @@ jobs:
   test:
     uses: ./.github/workflows/test.yml
 
+  # Two independent brakes, and both have to release. `code` is false when the
+  # merge changed nothing that reaches the image, and the step gate below is
+  # false when VERSION names a version that already shipped.
   release:
     needs: test
+    if: needs.test.outputs.code == 'true'
     runs-on: ubuntu-latest
     permissions:
       # Writes the tag, the GitHub release, and the VERSION bump back on dev.

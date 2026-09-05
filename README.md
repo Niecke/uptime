@@ -49,6 +49,19 @@ the release the current cycle is working towards.
 cycle and restarts at the next release. The version is compiled into the binary
 and is what `/version` and every log line report.
 
+### What starts a run
+
+Tests, images and releases only happen when the change can reach the binary or
+the image: `cmd/`, `internal/`, `go.mod`, `go.sum`, `Dockerfile`,
+`.dockerignore`, `config.yml.example`, `VERSION`, and `.github/` so that a
+pipeline change is exercised by the pipeline. A pull request that only touches
+the README, `compose.yml` or the `Caddyfile` reports its checks as skipped and
+merges without building anything.
+
+The filter is a condition on the jobs, not a `paths:` filter on the triggers. A
+workflow skipped by path filtering never reports its checks at all, which would
+leave a required check pending forever and block the merge.
+
 ### Cutting a release
 
 1. Run the **Open release PR** workflow from the Actions tab. Leave `bump` on

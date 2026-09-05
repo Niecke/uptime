@@ -7,6 +7,9 @@
   "baseBranchPatterns": [
     "dev"
   ],
+  "postUpdateOptions": [
+    "gomodTidy"
+  ],
   "packageRules": [
     {
       "description": "Keep Docker images (Dockerfile + compose) pinned to a digest, and bump the digest when the upstream tag is rebuilt.",
