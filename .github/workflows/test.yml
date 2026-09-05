@@ -1,7 +1,10 @@
 name: Test
 
+# No `push:` trigger. While a pull request is open every push to its branch also
+# fires `synchronize` on the same commit, so having both ran the whole suite
+# twice for nothing. Pushes to dev and main reach these tests through the dev
+# and release workflows, which call this one.
 on:
-  push:
   pull_request:
   workflow_call:
 
@@ -22,6 +25,15 @@ jobs:
           # Don't leave the GITHUB_TOKEN behind in .git/config, where any later step —
           # or anything a build script pulls in — could read it.
           persist-credentials: false
+          # Full history and tags: the version check below compares the VERSION
+          # file against the newest release tag.
+          fetch-depth: 0
+          fetch-tags: true
+
+      # Catches a malformed or stale VERSION on the pull request that introduced
+      # it, rather than half way through a release build.
+      - name: Validate VERSION
+        run: .github/scripts/version.sh
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
