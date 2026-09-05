@@ -1,0 +1,176 @@
+name: Open release PR
+
+# The button that starts a release. It decides the version, writes it to dev,
+# and opens the dev to main pull request with the changelog already filled in.
+# Merging that pull request is the only remaining manual step: release.yml takes
+# over from there.
+#
+# `bump` is relative to the last released tag, so it answers "what kind of
+# release is this" rather than asking for a number:
+#
+#   none    ship the version dev has been building all cycle
+#   patch   v0.1.4 -> 0.1.5
+#   minor   v0.1.4 -> 0.2.0
+#   major   v0.1.4 -> 1.0.0
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version to release, relative to the last release tag"
+        type: choice
+        default: none
+        options:
+          - none
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-pr
+  cancel-in-progress: false
+
+jobs:
+  open:
+    runs-on: ubuntu-latest
+    permissions:
+      # write: may rewrite VERSION on dev before the pull request is opened.
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Always dev, whatever branch the run was started from.
+          ref: dev
+          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve the version
+        id: v
+        run: .github/scripts/version.sh
+
+      - name: Apply the bump
+        id: bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUMP: ${{ inputs.bump }}
+          CURRENT: ${{ steps.v.outputs.version }}
+          LATEST: ${{ steps.v.outputs.latest }}
+        run: |
+          set -euo pipefail
+
+          if [ "$BUMP" = "none" ]; then
+            echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # No release yet means there is nothing to bump from; the VERSION file
+          # is the plan in that case.
+          base="${LATEST#v}"
+          base="${base:-0.0.0}"
+          IFS=. read -r maj min pat <<< "$base"
+
+          case "$BUMP" in
+            patch) target="$maj.$min.$((pat + 1))" ;;
+            minor) target="$maj.$((min + 1)).0" ;;
+            major) target="$((maj + 1)).0.0" ;;
+          esac
+
+          if [ "$target" = "$CURRENT" ]; then
+            echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
+            echo "dev already targets \`$CURRENT\`." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/VERSION?ref=dev" --jq .sha)"
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/VERSION" \
+            -f message="Release $target" \
+            -f content="$(printf '%s\n' "$target" | base64 -w0)" \
+            -f branch=dev \
+            -f sha="$sha" > /dev/null
+
+          echo "version=$target" >> "$GITHUB_OUTPUT"
+          echo "Moved VERSION on dev from \`$CURRENT\` to \`$target\`." >> "$GITHUB_STEP_SUMMARY"
+
+          # Allowed, and sometimes what you want — dev may have been aiming at a
+          # minor that turned out to be a patch — but the pre-release images
+          # already published this cycle carry the higher number, so say so.
+          highest="$(printf '%s\n%s\n' "$CURRENT" "$target" | sort -V | tail -n1)"
+          if [ "$highest" = "$CURRENT" ]; then
+            echo "::warning::$target is lower than the $CURRENT dev builds published this cycle."
+          fi
+
+      # The pull request is handed over as a prefilled link rather than created
+      # here. GitHub does not let a workflow open one without also granting
+      # Actions the right to approve pull requests, and a pull request opened by
+      # GITHUB_TOKEN triggers no `pull_request` workflows — its checks would
+      # never run, so required checks on main could never be satisfied. One
+      # click on this link opens the same pull request as a person, with the
+      # title and changelog already filled in.
+      - name: Hand over the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL: ${{ steps.bump.outputs.version }}
+          LATEST: ${{ steps.v.outputs.latest }}
+        run: |
+          set -euo pipefail
+
+          {
+            echo "Releases \`v$FULL\` from dev."
+            echo ""
+            echo "Merging this runs the suite on the merge commit, publishes the images to"
+            echo "Artifact Registry and Docker Hub, tags \`v$FULL\`, writes the release notes,"
+            echo "and moves dev on to the next patch."
+            echo ""
+            echo "## Changes"
+            echo ""
+            # HEAD, not origin/dev: this is the dev tree that was checked out,
+            # and it does not depend on a remote-tracking ref existing. Merge
+            # commits are dropped — the release notes GitHub generates on the
+            # tag are the ones that list pull requests.
+            # Capped at 40 by git rather than by piping into head: under
+            # pipefail, head closing the pipe early kills git with SIGPIPE and
+            # takes the whole step down with it. The cap matters because the
+            # body travels in a query string, and a long cycle would push the
+            # link past what a browser will follow.
+            if [ -n "$LATEST" ]; then
+              git log --reverse --no-merges -n 40 --pretty='- %s' "$LATEST..HEAD"
+            else
+              git log --reverse --no-merges -n 40 --pretty='- %s' HEAD
+            fi
+          } > body.md
+
+          existing="$(gh pr list --base main --head dev --state open --json url --jq '.[0].url // empty')"
+          if [ -n "$existing" ]; then
+            {
+              echo "### Release \`v$FULL\`"
+              echo ""
+              echo "A dev to main pull request is already open: $existing"
+              echo ""
+              echo "It picks up the version above automatically. Merge it to release."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # jq -sRr @uri percent-encodes the whole thing, newlines included, so
+          # the changelog survives the query string intact.
+          title="$(printf 'Release v%s' "$FULL" | jq -sRr @uri)"
+          body="$(jq -sRr @uri < body.md)"
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/main...dev?expand=1&title=$title&body=$body"
+
+          {
+            echo "### Release \`v$FULL\`"
+            echo ""
+            echo "[Open the release pull request]($url)"
+            echo ""
+            echo "Title and changelog are filled in. Merging it publishes the release."
+            echo ""
+            echo "<details><summary>Changelog</summary>"
+            echo ""
+            cat body.md
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"

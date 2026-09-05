@@ -1,12 +1,30 @@
 name: Release
 
+# Cutting a release is one action: merge dev into main. This runs the suite once
+# more on the merge commit, builds the images with the release version compiled
+# in, publishes them, tags the commit and writes the release notes, then moves
+# dev on to the next patch. Nothing here is typed by hand.
+#
+# It keys on the branch, not on a tag. A tag pushed from a laptop can therefore
+# no longer ship an unbuilt or untested revision, and the tag this job creates
+# does not trigger anything, so there is no loop.
+#
+# VERSION is the input. A push to main that leaves it alone — a documentation
+# fix, a revert — finds its tag already published and stops before building.
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+# Releases are never cancelled: a half-pushed set of registry tags is worse than
+# a queued run.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   test:
@@ -15,49 +33,69 @@ jobs:
   release:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      # Writes the tag, the GitHub release, and the VERSION bump back on dev.
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # version.sh reads the release tags, and the build stamps the commit.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve the version
+        id: v
+        run: .github/scripts/version.sh
+
+      # Being already tagged is the normal outcome for any push to main that is
+      # not a release, so it is a skip and not a failure.
+      - name: Decide whether there is a release to cut
+        id: gate
+        env:
+          RELEASED: ${{ steps.v.outputs.released }}
+          FULL: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$RELEASED" = "true" ]; then
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "\`v$FULL\` is already released — nothing to do." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Authenticate to GCP
+        if: steps.gate.outputs.go == 'true'
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Configure Docker for Artifact Registry
+        if: steps.gate.outputs.go == 'true'
         run: gcloud auth configure-docker europe-west3-docker.pkg.dev --quiet
 
       - name: Log in to Docker Hub
+        if: steps.gate.outputs.go == 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Compute version tags
-        id: v
-        run: |
-          # The `v*.*.*` trigger glob is looser than it looks — `*` matches any character
-          # except `/`, so it would happily accept a tag carrying shell metacharacters.
-          # Re-validate as strict semver before the value is used anywhere downstream.
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Refusing to release from non-semver tag: $GITHUB_REF_NAME" >&2
-            exit 1
-          fi
-          V="${GITHUB_REF_NAME#v}"          # v1.2.3 -> 1.2.3
-          echo "full=$V"        >> "$GITHUB_OUTPUT"
-          echo "minor=${V%.*}"  >> "$GITHUB_OUTPUT"   # 1.2
-          echo "major=${V%%.*}" >> "$GITHUB_OUTPUT"   # 1
-
+      # Rebuilt rather than retagged from the dev image on purpose: the version
+      # is compiled in through ldflags, so promoting a dev digest would ship a
+      # binary answering 0.2.0-dev.7 on /version and in every log line. Same
+      # source tree, and the suite above just ran on this commit.
       - name: Build and push
+        if: steps.gate.outputs.go == 'true'
         env:
           GAR: europe-west3-docker.pkg.dev/niecke-it/niecke-it/uptime
           HUB: docker.io/niecke11/uptime
           # Step outputs go through env, never spliced straight into the script body.
-          FULL: ${{ steps.v.outputs.full }}
+          FULL: ${{ steps.v.outputs.version }}
           MINOR: ${{ steps.v.outputs.minor }}
           MAJOR: ${{ steps.v.outputs.major }}
         run: |
+          set -euo pipefail
           docker build \
             --build-arg BUILD_GIT_HASH="$(git rev-parse --short HEAD)" \
             --build-arg BUILD_VERSION="$FULL" \
@@ -67,3 +105,62 @@ jobs:
             -t "$GAR:latest" -t "$HUB:latest" .
           docker push --all-tags "$GAR"
           docker push --all-tags "$HUB"
+
+      # After the push, so a failed build leaves no tag claiming a release that
+      # was never published. --target creates the tag on this commit, and
+      # --generate-notes writes the changelog from the merged pull requests.
+      - name: Tag and publish the release
+        if: steps.gate.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "v$FULL" \
+            --target "$GITHUB_SHA" \
+            --title "v$FULL" \
+            --generate-notes
+          echo "Released [v$FULL](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/v$FULL)." \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      # Opens the next cycle so dev never sits on an already-released version,
+      # which is the state the dev workflow refuses to build. Written through the
+      # contents API rather than a git push, so no token has to be left behind in
+      # .git/config.
+      #
+      # Not fatal: the release itself is already published by this point, and a
+      # protected dev branch or a hand-raised VERSION is a warning, not a broken
+      # release.
+      - name: Start the next cycle on dev
+        if: steps.gate.outputs.go == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          IFS=. read -r maj min pat <<< "$FULL"
+          next="$maj.$min.$((pat + 1))"
+
+          current_b64="$(gh api "repos/$GITHUB_REPOSITORY/contents/VERSION?ref=dev" --jq .content 2>/dev/null || true)"
+          if [ -z "$current_b64" ]; then
+            echo "No VERSION on dev — skipped the bump." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          current="$(printf '%s' "$current_b64" | base64 -d | tr -d '[:space:]')"
+
+          # dev may already have been raised past the next patch by hand, for a
+          # planned minor or major. Leave that decision alone.
+          highest="$(printf '%s\n%s\n' "$current" "$next" | sort -V | tail -n1)"
+          if [ "$highest" = "$current" ] && [ "$current" != "$next" ]; then
+            echo "dev is already on \`$current\` — left as is." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/VERSION?ref=dev" --jq .sha)"
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/VERSION" \
+            -f message="Start the $next development cycle" \
+            -f content="$(printf '%s\n' "$next" | base64 -w0)" \
+            -f branch=dev \
+            -f sha="$sha" > /dev/null
+          echo "dev now targets \`$next\`." >> "$GITHUB_STEP_SUMMARY"
