@@ -4,8 +4,11 @@
     "config:recommended",
     "helpers:pinGitHubActionDigests"
   ],
-  "baseBranches": [
+  "baseBranchPatterns": [
     "dev"
+  ],
+  "postUpdateOptions": [
+    "gomodTidy"
   ],
   "packageRules": [
     {
