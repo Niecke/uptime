@@ -4,6 +4,8 @@
     "config:recommended",
     "helpers:pinGitHubActionDigests"
   ],
+  "//": "Dependency updates are changes like any other: they belong on dev, get a pre-release image, and ship with the next release. Targeting main would put an untested bump straight into a release build.",
+  "baseBranches": ["dev"],
   "packageRules": [
     {
       "description": "Keep Docker images (Dockerfile + compose) pinned to a digest, and bump the digest when the upstream tag is rebuilt.",

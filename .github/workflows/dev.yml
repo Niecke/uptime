@@ -1,0 +1,88 @@
+name: Dev
+
+# Everything lands on dev first. Each push there produces a numbered pre-release
+# image so the version a dev deployment reports is the same string the release
+# will carry, minus the `-dev.N` suffix.
+#
+# Artifact Registry only. Docker Hub is the public download and stays release
+# only, so nobody can pull an unreleased build from it by accident.
+on:
+  push:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to dev makes the one in flight irrelevant. Releases are not
+# cancellable, so they get their own group in release.yml.
+concurrency:
+  group: dev-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Tags and full history: version.sh counts commits since the last
+          # release to number this build.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve the version
+        id: v
+        run: .github/scripts/version.sh
+
+      # VERSION still naming a version that shipped means the cycle was never
+      # opened. Building anyway would publish 0.1.4-dev.3 as if it preceded
+      # 0.1.4, which it does not.
+      - name: Refuse to build against a released version
+        env:
+          RELEASED: ${{ steps.v.outputs.released }}
+          FULL: ${{ steps.v.outputs.version }}
+        run: |
+          if [ "$RELEASED" = "true" ]; then
+            echo "::error file=VERSION::v$FULL is already released." \
+                 "Raise VERSION on dev to start the next cycle." >&2
+            exit 1
+          fi
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker europe-west3-docker.pkg.dev --quiet
+
+      - name: Build and push
+        env:
+          GAR: europe-west3-docker.pkg.dev/niecke-it/niecke-it/uptime
+          # Context values and step outputs travel through env rather than being
+          # spliced into the script body, where they would be an injection sink.
+          GIT_SHA: ${{ github.sha }}
+          DEV_VERSION: ${{ steps.v.outputs.dev_version }}
+        run: |
+          set -euo pipefail
+          docker build --build-arg BUILD_GIT_HASH="$(git rev-parse --short HEAD)" \
+                       --build-arg BUILD_VERSION="$DEV_VERSION" \
+                       -t "$GAR:$DEV_VERSION" \
+                       -t "$GAR:dev" \
+                       -t "$GAR:$GIT_SHA" .
+          docker push "$GAR:$DEV_VERSION"
+          docker push "$GAR:dev"
+          docker push "$GAR:$GIT_SHA"
+
+          {
+            echo "Pushed \`$DEV_VERSION\` to Artifact Registry."
+            echo ""
+            echo "Also tagged \`dev\` and \`$GIT_SHA\`."
+          } >> "$GITHUB_STEP_SUMMARY"
