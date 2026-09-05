@@ -4,24 +4,33 @@
     "config:recommended",
     "helpers:pinGitHubActionDigests"
   ],
-  "//": "Dependency updates are changes like any other: they belong on dev, get a pre-release image, and ship with the next release. Targeting main would put an untested bump straight into a release build.",
-  "baseBranches": ["dev"],
+  "baseBranches": [
+    "dev"
+  ],
   "packageRules": [
     {
       "description": "Keep Docker images (Dockerfile + compose) pinned to a digest, and bump the digest when the upstream tag is rebuilt.",
-      "matchDatasources": ["docker"],
+      "matchDatasources": [
+        "docker"
+      ],
       "pinDigests": true
     },
     {
       "description": "Go patch updates are low-risk; batch them into one PR to keep review noise down.",
-      "matchManagers": ["gomod"],
-      "matchUpdateTypes": ["patch"],
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchUpdateTypes": [
+        "patch"
+      ],
       "groupName": "go patch updates"
     }
   ],
   "vulnerabilityAlerts": {
     "enabled": true,
-    "labels": ["security"]
+    "labels": [
+      "security"
+    ]
   },
   "osvVulnerabilityAlerts": true
 }
