@@ -87,9 +87,18 @@ leave a required check pending forever and block the merge.
 
 The rest is automatic: the image that pull request built and tested is retagged
 with the release version on both registries, `v0.2.0` is tagged with generated
-release notes, and `VERSION` on dev moves to the next patch so the following
-cycle can start. Renovate then raises the usual pull request to bump the pinned
-image in `compose.yml`.
+release notes, the image line in `compose.yml` is repinned to the released tag
+and digest, and `VERSION` on dev moves to the next patch so the following cycle
+can start.
+
+`compose.yml` is the record of what runs on the server, so the release writes it
+rather than Renovate: at that moment the tag has just been published and the
+digest has just been checked identical on both registries. Renovate is turned
+off for this repository's own image and still watches Caddy. Both writes land on
+dev, so the copy on `main` is one release behind until the next merge, the same
+as `VERSION`.
+
+Deploying is still manual. The pin says what to run, not that it is running.
 
 Because releases promote rather than build, a commit that reaches `main` without
 a pull request has no tested image behind it, and the release fails saying so

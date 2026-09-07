@@ -19,6 +19,16 @@
       "pinDigests": true
     },
     {
+      "description": "This repo's own image. The release workflow writes the tag and digest into compose.yml the moment it publishes them, so Renovate would only ever raise a PR for a line that is already correct.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "niecke11/uptime"
+      ],
+      "enabled": false
+    },
+    {
       "description": "Go patch updates are low-risk; batch them into one PR to keep review noise down.",
       "matchManagers": [
         "gomod"

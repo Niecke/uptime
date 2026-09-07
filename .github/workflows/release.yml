@@ -116,6 +116,7 @@ jobs:
       # it is the one being tagged, because CI baked VERSION rather than the
       # pre-release string.
       - name: Publish the release tags
+        id: publish
         if: steps.gate.outputs.go == 'true'
         env:
           SRC: ${{ steps.source.outputs.tag }}
@@ -148,6 +149,9 @@ jobs:
             exit 1
           fi
 
+          # Both registries serve this digest, so it is what compose.yml pins.
+          echo "digest=$gar_digest" >> "$GITHUB_OUTPUT"
+
           {
             echo "Promoted \`$SRC\` to \`$FULL\`, \`$MINOR\`, \`$MAJOR\` and \`latest\` on both registries."
             echo ""
@@ -171,6 +175,65 @@ jobs:
             --generate-notes
           echo "Released [v$FULL](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/v$FULL)." \
             >> "$GITHUB_STEP_SUMMARY"
+
+      # compose.yml records what is deployed, and the release is the moment that
+      # value is known: the tag was just published and the digest was just
+      # verified identical on both registries. Renovate used to raise this as a
+      # pull request one cycle later, which is a review of a line the release had
+      # already decided.
+      #
+      # Not fatal: the release is published by this point, and a stale pin is a
+      # warning, not a broken release.
+      - name: Pin the released image in compose.yml on dev
+        if: steps.gate.outputs.go == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL: ${{ steps.v.outputs.version }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$DIGEST" ]; then
+            echo "::warning::No digest from the publish step — left compose.yml alone."
+            exit 0
+          fi
+
+          current_b64="$(gh api "repos/$GITHUB_REPOSITORY/contents/compose.yml?ref=dev" --jq .content 2>/dev/null || true)"
+          if [ -z "$current_b64" ]; then
+            echo "No compose.yml on dev — skipped the pin." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          tmp="$(mktemp -d)"
+          printf '%s' "$current_b64" | base64 -d > "$tmp/before.yml"
+          cp "$tmp/before.yml" "$tmp/after.yml"
+
+          ref="niecke11/uptime:$FULL@$DIGEST"
+          # Only the image reference changes. Indentation, comments and every
+          # other service in the file are left exactly as they are.
+          sed -E -i "s|^([[:space:]]*image:[[:space:]]*)niecke11/uptime:.*$|\1$ref|" "$tmp/after.yml"
+
+          # A file that does not contain the new reference means the line was
+          # renamed or removed, and this should not guess at where it went.
+          if ! grep -qF -- "$ref" "$tmp/after.yml"; then
+            echo "::warning::No niecke11/uptime image line in compose.yml — left it alone."
+            exit 0
+          fi
+
+          if cmp -s "$tmp/before.yml" "$tmp/after.yml"; then
+            echo "compose.yml on dev already pins \`$ref\`." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/compose.yml?ref=dev" --jq .sha)"
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/compose.yml" \
+            -f message="Deploy $FULL" \
+            -f content="$(base64 -w0 "$tmp/after.yml")" \
+            -f branch=dev \
+            -f sha="$sha" > /dev/null
+
+          echo "compose.yml on dev now pins \`$ref\`." >> "$GITHUB_STEP_SUMMARY"
 
       # Opens the next cycle so dev never sits on an already-released version,
       # which is the state the dev workflow refuses to publish. Written through
