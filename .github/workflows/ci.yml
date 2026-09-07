@@ -1,0 +1,174 @@
+name: CI
+
+# The only place an image is ever built. A pull request runs the suite and, if
+# it passes, builds the image once and pushes it tagged with the head commit.
+# Merging to dev and releasing from main retag that exact digest, so the bytes
+# that were tested are the bytes that get deployed.
+#
+# Only `pull_request`. Every push to a branch with an open pull request also
+# fires `synchronize` on the same commit, so a push trigger would run all of
+# this twice for one change. Pushes to dev and main are merges of commits that
+# were already tested here.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same pull request makes the run in flight irrelevant.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  GAR: europe-west3-docker.pkg.dev/niecke-it/niecke-it/uptime
+
+jobs:
+  # Deliberately a job-level `if:` on the jobs below rather than a `paths:`
+  # filter on the trigger. A workflow skipped by path filtering never reports
+  # its checks, so a required check in the ruleset would sit pending and the
+  # pull request could never merge. A job skipped by `if:` reports a `skipped`
+  # conclusion, which satisfies it.
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Both ends of the range have to be in the clone to diff them.
+          fetch-depth: 0
+
+      - id: filter
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          code="$(.github/scripts/code-changed.sh "$BASE" "$HEAD" "$EVENT")"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" = "true" ]; then
+            echo "Code or image inputs changed — running the suite and building the image." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Nothing that reaches the binary or the image changed — tests, build and release are skipped." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # For a pull request `github.sha` is the ephemeral merge commit, which no
+  # image may be tagged with: after the merge, dev and main look the image up by
+  # the head sha that was tested.
+  meta:
+    name: Resolve build identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      commit: ${{ steps.id.outputs.commit }}
+      tag: ${{ steps.id.outputs.tag }}
+    steps:
+      - id: id
+        env:
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          echo "commit=$HEAD" >> "$GITHUB_OUTPUT"
+          echo "tag=ci-${HEAD:0:7}" >> "$GITHUB_OUTPUT"
+
+  tests:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      # Actions are pinned to a commit SHA, not a tag. Tags are mutable: whoever controls
+      # the action's repo can repoint v7 at new code and every consumer picks it up on the
+      # next run. The trailing comment is what Renovate reads to keep the pin updated.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Don't leave the GITHUB_TOKEN behind in .git/config, where any later step —
+          # or anything a build script pulls in — could read it.
+          persist-credentials: false
+          # Full history and tags: the version check below compares the VERSION
+          # file against the newest release tag.
+          fetch-depth: 0
+          fetch-tags: true
+
+      # Catches a malformed or stale VERSION on the pull request that introduced
+      # it, rather than half way through a release.
+      - name: Validate VERSION
+        run: .github/scripts/version.sh
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Re-hashes every downloaded module and fails if it doesn't match go.sum.
+      - name: Verify module checksums
+        run: go mod verify
+
+      # Fails if go.mod/go.sum are out of sync with the imports — the state in which an
+      # unreviewed dependency could otherwise ride along unnoticed.
+      - name: Check go.mod is tidy
+        run: go mod tidy -diff
+
+      - name: Run tests
+        run: go test ./...
+
+      # Checks the dependency tree against the Go vulnerability database. Reports only
+      # vulnerabilities actually reachable from this module's code paths.
+      - name: Scan dependencies for known vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
+  build:
+    name: Build image
+    needs: [changes, meta, tests]
+    # A pull request from a fork has no access to the registry credentials, and
+    # a manual run has no pull request head to tag an image with. Both stop at
+    # the tests, and the merge then finds no image to promote.
+    if: >-
+      needs.changes.outputs.code == 'true' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The head commit itself, not the merge preview: this is the tree the
+          # image is tagged after.
+          ref: ${{ needs.meta.outputs.commit }}
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker europe-west3-docker.pkg.dev --quiet
+
+      # The version compiled in is the one VERSION names, without the `-dev.N`
+      # suffix the pre-release tags carry. That is what lets a single build serve
+      # both: the digest promoted to `0.1.7` reports 0.1.7, because it was
+      # always going to be 0.1.7. The git hash is what tells two builds of the
+      # same version apart.
+      - name: Build and push
+        env:
+          COMMIT: ${{ needs.meta.outputs.commit }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          docker build \
+            --build-arg BUILD_GIT_HASH="${COMMIT:0:7}" \
+            --build-arg BUILD_VERSION="$version" \
+            -t "$GAR:$TAG" .
+          docker push "$GAR:$TAG"
+
+          {
+            echo "Built \`$TAG\` from \`${COMMIT:0:7}\`, version \`$version\`."
+            echo ""
+            echo "Merging retags this digest. Nothing downstream rebuilds it."
+          } >> "$GITHUB_STEP_SUMMARY"

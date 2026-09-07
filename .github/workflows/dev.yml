@@ -1,8 +1,7 @@
 name: Dev
 
-# Everything lands on dev first. Each push there produces a numbered pre-release
-# image so the version a dev deployment reports is the same string the release
-# will carry, minus the `-dev.N` suffix.
+# Merging to dev does not build anything. It retags the image the pull request
+# already built and tested, so a dev deployment runs the exact digest CI ran.
 #
 # Artifact Registry only. Docker Hub is the public download and stays release
 # only, so nobody can pull an unreleased build from it by accident.
@@ -15,29 +14,26 @@ on:
 permissions:
   contents: read
 
-# A newer push to dev makes the one in flight irrelevant. Releases are not
-# cancellable, so they get their own group in release.yml.
+# Not cancellable: a run cut halfway through leaves some tags moved and others
+# pointing at the previous digest.
 concurrency:
-  group: dev-${{ github.ref }}
-  cancel-in-progress: true
+  group: dev
+  cancel-in-progress: false
+
+env:
+  GAR: europe-west3-docker.pkg.dev/niecke-it/niecke-it/uptime
 
 jobs:
-  test:
-    uses: ./.github/workflows/test.yml
-
-  # No image for a change that cannot reach the binary. `code` comes from the
-  # detection job inside the test workflow, which runs even when the suite
-  # itself is skipped, so this is never left undefined.
-  build:
-    needs: test
-    if: needs.test.outputs.code == 'true'
+  promote:
+    name: Retag the tested image
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Tags and full history: version.sh counts commits since the last
-          # release to number this build.
+          # version.sh counts commits since the last release tag to number this
+          # build, and the image lookup may need the merge commit's parents.
           fetch-depth: 0
           fetch-tags: true
 
@@ -46,9 +42,9 @@ jobs:
         run: .github/scripts/version.sh
 
       # VERSION still naming a version that shipped means the cycle was never
-      # opened. Building anyway would publish 0.1.4-dev.3 as if it preceded
-      # 0.1.4, which it does not.
-      - name: Refuse to build against a released version
+      # opened. Publishing anyway would tag 0.1.6-dev.3 as if it came before
+      # 0.1.6, which it does not.
+      - name: Refuse to publish against a released version
         env:
           RELEASED: ${{ steps.v.outputs.released }}
           FULL: ${{ steps.v.outputs.version }}
@@ -59,6 +55,16 @@ jobs:
             exit 1
           fi
 
+      - name: Find the tested image
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$(.github/scripts/source-tag.sh)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Looking for $GAR:$tag"
+
       - name: Authenticate to GCP
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
@@ -67,26 +73,42 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker europe-west3-docker.pkg.dev --quiet
 
-      - name: Build and push
+      # CI builds an image only when application code changed, so a pull request
+      # touching just the README or compose.yml merges without ever producing
+      # one. There is nothing to promote then, and nothing to redeploy either.
+      #
+      # A build that genuinely failed cannot reach here: it is a required check,
+      # so the pull request would not have been mergeable.
+      - name: Check the image exists
+        id: image
         env:
-          GAR: europe-west3-docker.pkg.dev/niecke-it/niecke-it/uptime
-          # Context values and step outputs travel through env rather than being
-          # spliced into the script body, where they would be an injection sink.
-          GIT_SHA: ${{ github.sha }}
+          SRC: ${{ steps.source.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "$GAR:$SRC" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No image tagged \`$SRC\` — CI skipped the build because no application code changed. Nothing to promote." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # imagetools copies the manifest by digest: same bytes, extra tags. No
+      # rebuild, so the binary keeps the git hash of the commit that was tested.
+      - name: Retag as the pre-release
+        if: steps.image.outputs.exists == 'true'
+        env:
+          SRC: ${{ steps.source.outputs.tag }}
           DEV_VERSION: ${{ steps.v.outputs.dev_version }}
         run: |
           set -euo pipefail
-          docker build --build-arg BUILD_GIT_HASH="$(git rev-parse --short HEAD)" \
-                       --build-arg BUILD_VERSION="$DEV_VERSION" \
-                       -t "$GAR:$DEV_VERSION" \
-                       -t "$GAR:dev" \
-                       -t "$GAR:$GIT_SHA" .
-          docker push "$GAR:$DEV_VERSION"
-          docker push "$GAR:dev"
-          docker push "$GAR:$GIT_SHA"
+          docker buildx imagetools create \
+            --tag "$GAR:$DEV_VERSION" \
+            --tag "$GAR:dev" \
+            "$GAR:$SRC"
 
+          digest="$(docker buildx imagetools inspect "$GAR:$DEV_VERSION" --format '{{.Manifest.Digest}}')"
           {
-            echo "Pushed \`$DEV_VERSION\` to Artifact Registry."
+            echo "Promoted \`$SRC\` to \`$DEV_VERSION\` and \`dev\`."
             echo ""
-            echo "Also tagged \`dev\` and \`$GIT_SHA\`."
+            echo "Digest \`$digest\`."
           } >> "$GITHUB_STEP_SUMMARY"
