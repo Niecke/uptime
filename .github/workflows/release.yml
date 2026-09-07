@@ -1,16 +1,16 @@
 name: Release
 
-# Cutting a release is one action: merge dev into main. This runs the suite once
-# more on the merge commit, builds the images with the release version compiled
-# in, publishes them, tags the commit and writes the release notes, then moves
-# dev on to the next patch. Nothing here is typed by hand.
+# Cutting a release is one action: merge dev into main. Nothing is rebuilt and
+# nothing is retested. The image the pull request built and the suite passed on
+# is retagged with the release version, copied to Docker Hub, and the commit is
+# tagged with generated release notes. Then dev moves on to the next patch.
 #
 # It keys on the branch, not on a tag. A tag pushed from a laptop can therefore
 # no longer ship an unbuilt or untested revision, and the tag this job creates
 # does not trigger anything, so there is no loop.
 #
 # VERSION is the input. A push to main that leaves it alone — a documentation
-# fix, a revert — finds its tag already published and stops before building.
+# fix, a revert — finds its tag already published and stops.
 on:
   push:
     branches:
@@ -20,31 +20,29 @@ on:
 permissions:
   contents: read
 
-# Releases are never cancelled: a half-pushed set of registry tags is worse than
+# Releases are never cancelled: a half-moved set of registry tags is worse than
 # a queued run.
 concurrency:
   group: release
   cancel-in-progress: false
 
-jobs:
-  test:
-    uses: ./.github/workflows/test.yml
+env:
+  GAR: europe-west3-docker.pkg.dev/niecke-it/niecke-it/uptime
+  HUB: docker.io/niecke11/uptime
 
-  # Two independent brakes, and both have to release. `code` is false when the
-  # merge changed nothing that reaches the image, and the step gate below is
-  # false when VERSION names a version that already shipped.
+jobs:
   release:
-    needs: test
-    if: needs.test.outputs.code == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
-      # Writes the tag, the GitHub release, and the VERSION bump back on dev.
+      # write: creates the tag, the GitHub release, and the VERSION bump on dev.
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # version.sh reads the release tags, and the build stamps the commit.
+          # version.sh reads the release tags, and the image lookup may need the
+          # merge commit's parents.
           fetch-depth: 0
           fetch-tags: true
 
@@ -68,6 +66,17 @@ jobs:
             echo "go=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Find the tested image
+        id: source
+        if: steps.gate.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$(.github/scripts/source-tag.sh)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Looking for $GAR:$tag"
+
       - name: Authenticate to GCP
         if: steps.gate.outputs.go == 'true'
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -85,34 +94,70 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Rebuilt rather than retagged from the dev image on purpose: the version
-      # is compiled in through ldflags, so promoting a dev digest would ship a
-      # binary answering 0.2.0-dev.7 on /version and in every log line. Same
-      # source tree, and the suite above just ran on this commit.
-      - name: Build and push
+      # A release with nothing built for it is a real problem, not a skip: the
+      # version is unreleased, so this merge was meant to ship something. It
+      # happens when a commit reaches main without a pull request, which leaves
+      # no tested image to promote.
+      - name: Check the image exists
         if: steps.gate.outputs.go == 'true'
         env:
-          GAR: europe-west3-docker.pkg.dev/niecke-it/niecke-it/uptime
-          HUB: docker.io/niecke11/uptime
-          # Step outputs go through env, never spliced straight into the script body.
+          SRC: ${{ steps.source.outputs.tag }}
+          FULL: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          if ! docker buildx imagetools inspect "$GAR:$SRC" > /dev/null 2>&1; then
+            echo "::error::No image tagged $SRC for this merge, so v$FULL cannot be released." \
+                 "Images are built on pull requests — merge through one rather than pushing to main." >&2
+            exit 1
+          fi
+
+      # imagetools copies the manifest by digest: same bytes, extra tags. The
+      # digest released is the digest CI tested, and the version compiled into
+      # it is the one being tagged, because CI baked VERSION rather than the
+      # pre-release string.
+      - name: Publish the release tags
+        if: steps.gate.outputs.go == 'true'
+        env:
+          SRC: ${{ steps.source.outputs.tag }}
           FULL: ${{ steps.v.outputs.version }}
           MINOR: ${{ steps.v.outputs.minor }}
           MAJOR: ${{ steps.v.outputs.major }}
         run: |
           set -euo pipefail
-          docker build \
-            --build-arg BUILD_GIT_HASH="$(git rev-parse --short HEAD)" \
-            --build-arg BUILD_VERSION="$FULL" \
-            -t "$GAR:$FULL"  -t "$HUB:$FULL" \
-            -t "$GAR:$MINOR" -t "$HUB:$MINOR" \
-            -t "$GAR:$MAJOR" -t "$HUB:$MAJOR" \
-            -t "$GAR:latest" -t "$HUB:latest" .
-          docker push --all-tags "$GAR"
-          docker push --all-tags "$HUB"
 
-      # After the push, so a failed build leaves no tag claiming a release that
-      # was never published. --target creates the tag on this commit, and
-      # --generate-notes writes the changelog from the merged pull requests.
+          docker buildx imagetools create \
+            --tag "$GAR:$FULL" \
+            --tag "$GAR:$MINOR" \
+            --tag "$GAR:$MAJOR" \
+            --tag "$GAR:latest" \
+            "$GAR:$SRC"
+
+          # Same call across registries: it copies the blobs into Docker Hub and
+          # pushes the identical manifest, so both registries serve one digest.
+          docker buildx imagetools create \
+            --tag "$HUB:$FULL" \
+            --tag "$HUB:$MINOR" \
+            --tag "$HUB:$MAJOR" \
+            --tag "$HUB:latest" \
+            "$GAR:$SRC"
+
+          gar_digest="$(docker buildx imagetools inspect "$GAR:$FULL" --format '{{.Manifest.Digest}}')"
+          hub_digest="$(docker buildx imagetools inspect "$HUB:$FULL" --format '{{.Manifest.Digest}}')"
+          if [ "$gar_digest" != "$hub_digest" ]; then
+            echo "::error::Artifact Registry has $gar_digest but Docker Hub has $hub_digest." >&2
+            exit 1
+          fi
+
+          {
+            echo "Promoted \`$SRC\` to \`$FULL\`, \`$MINOR\`, \`$MAJOR\` and \`latest\` on both registries."
+            echo ""
+            echo "Digest \`$gar_digest\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # After the registries, so a failed promotion leaves no tag claiming a
+      # release that was never published. --target creates the tag on this
+      # commit, and --generate-notes writes the changelog from the merged pull
+      # requests.
       - name: Tag and publish the release
         if: steps.gate.outputs.go == 'true'
         env:
@@ -128,9 +173,9 @@ jobs:
             >> "$GITHUB_STEP_SUMMARY"
 
       # Opens the next cycle so dev never sits on an already-released version,
-      # which is the state the dev workflow refuses to build. Written through the
-      # contents API rather than a git push, so no token has to be left behind in
-      # .git/config.
+      # which is the state the dev workflow refuses to publish. Written through
+      # the contents API rather than a git push, so no token has to be left
+      # behind in .git/config.
       #
       # Not fatal: the release itself is already published by this point, and a
       # protected dev branch or a hand-raised VERSION is a warning, not a broken
