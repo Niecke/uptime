@@ -1,6 +1,6 @@
 # Base images are pinned by digest, not just by tag — a tag can be repointed at a
 # different image, a digest cannot. Renovate keeps these digests current.
-FROM golang:1.27.1-alpine3.24@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS build
+FROM golang:1.27.1-alpine3.24@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS build
 
 ARG BUILD_GIT_HASH="unknown"
 ARG BUILD_VERSION="dev"
