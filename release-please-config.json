@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "e2796a446589deac9e2c4fcf0f492420d71021a7",
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "package-name": "uptime",
+      "initial-version": "0.1.0",
+      "include-component-in-tag": false,
+      "changelog-path": "CHANGELOG.md"
+    }
+  }
+}

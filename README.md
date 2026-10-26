@@ -35,28 +35,47 @@ DEV=true go run cmd/main.go -config=./config.yml
 
 ## Branches and releases
 
-Work lands on `dev` and is released by merging `dev` into `main`. The `VERSION`
-file at the repo root is the only place a version is written by hand: it holds
-the release the current cycle is working towards.
+Development is trunk-based: branches start from `main` and come back to `main`
+through a pull request. Pull requests are squash-merged, and the pull request
+title is the commit message, so it has to be a
+[Conventional Commit](https://www.conventionalcommits.org/) such as
+`fix: record the status of a timed-out check` or `feat: show the response time`.
+The **commitlint** workflow checks the title.
+
+[release-please](https://github.com/googleapis/release-please) reads those
+commits and keeps one release pull request, `chore(main): release X.Y.Z`, open
+against `main`. Merging it is the release decision. Nobody edits a version or
+creates a tag by hand: the version lives in `.release-please-manifest.json` and
+`CHANGELOG.md` is written by release-please.
+
+The image is built exactly once, on the pull request, after the suite passes.
+Every step after that retags that same digest, so the bytes that were tested are
+the bytes that get deployed.
 
 | Event | Images | Git |
 | --- | --- | --- |
-| Pull request into `dev` | none, tests only | |
-| Push to `dev` | Artifact Registry `0.2.0-dev.N`, `dev`, `<sha>` | |
-| Push to `main` | Artifact Registry and Docker Hub `0.2.0`, `0.2`, `0`, `latest` | tag `v0.2.0` and release notes |
+| Pull request | tests, then build and push Artifact Registry `ci-<head sha>` | |
+| Push to `main` | retag as Artifact Registry `sha-<short sha>` (`promote.yml`) | release pull request opened or updated (`release-please.yml`) |
+| Release pull request merged | retag as `X.Y.Z`, `X.Y`, `X`, `latest` on Artifact Registry and Docker Hub (`release.yml`) | tag `vX.Y.Z`, GitHub Release with the changelog and the image digest |
 
-`N` counts the commits since the last release tag, so it only grows within a
-cycle and restarts at the next release. The version is compiled into the binary
-and is what `/version` and every log line report.
+Nothing is retested or rebuilt on a merge. A pull request is tested as the merge
+preview of head and base, which is the same tree the merge commit produces, and
+retagging cannot change what is inside the image.
+
+The version compiled into the binary is `dev-<short sha>` on every ordinary
+pull request. On the release pull request it is the version in
+`.release-please-manifest.json`, so the digest that gets promoted to `X.Y.Z`
+reports `X.Y.Z`. The git hash, also compiled in, is what tells two builds of the
+same version apart. Both are on `/version` and on every log line.
 
 ### What starts a run
 
 Tests, images and releases only happen when the change can reach the binary or
 the image: `cmd/`, `internal/`, `go.mod`, `go.sum`, `Dockerfile`,
-`.dockerignore`, `config.yml.example`, `VERSION`, and `.github/` so that a
-pipeline change is exercised by the pipeline. A pull request that only touches
-the README, `compose.yml` or the `Caddyfile` reports its checks as skipped and
-merges without building anything.
+`.dockerignore`, `config.yml.example`, `.release-please-manifest.json`, and
+`.github/` so that a pipeline change is exercised by the pipeline. A pull
+request that only touches the README, `compose.yml` or the `Caddyfile` reports
+its checks as skipped and merges without building anything.
 
 The filter is a condition on the jobs, not a `paths:` filter on the triggers. A
 workflow skipped by path filtering never reports its checks at all, which would
@@ -64,28 +83,36 @@ leave a required check pending forever and block the merge.
 
 ### Cutting a release
 
-1. Run the **Open release PR** workflow from the Actions tab. Leave `bump` on
-   `none` to ship the version dev has been building, or pick `patch`, `minor` or
-   `major` to decide at cut time. It rewrites `VERSION` on dev if needed and
-   puts a link in the run summary that opens the pull request with the title and
-   changelog already filled in.
-2. Follow the link, create the pull request, merge it.
+Merge the release pull request that release-please keeps open. That is all: it
+tags `vX.Y.Z` and publishes the GitHub Release, the tag starts `release.yml`, and
+that retags the image `promote.yml` tagged `sha-<short sha>` for the merge. The
+release job waits up to ten minutes for that tag, because both workflows start
+on the same push.
 
-The rest is automatic: the suite runs on the merge commit, the images are built
-with the release version compiled in and pushed to both registries, `v0.2.0` is
-tagged with generated release notes, and `VERSION` on dev moves to the next
-patch so the following cycle can start. Renovate then raises the usual pull
-request to bump the pinned image in `compose.yml`.
+Because releases promote rather than build, a commit that reaches `main` without
+a pull request has no tested image behind it, and the release fails saying so
+rather than shipping something nothing ever checked. A release pull request
+that changes no code is the same case: the `Build image` check reports `skipped`
+and there is nothing to promote.
 
-A push to `main` that does not change `VERSION` finds its tag already published
-and stops before building, so documentation fixes and reverts on main are safe.
+`compose.yml` is the record of what runs on the server. The release does not
+write it; Renovate raises a pull request for the pinned image like any other
+dependency, and deploying is still manual.
+
+The release pull request must be opened with a token that can start workflows,
+otherwise its checks never run and a required check cannot be satisfied. Add a
+fine-grained personal access token with `Contents` and `Pull requests`
+read/write as the repository secret `RELEASE_PLEASE_TOKEN`. Without it
+release-please falls back to `GITHUB_TOKEN`: the release pull request is still
+opened, but it gets no CI run and the tag it pushes does not start `release.yml`.
 
 ### Branch protection
 
-`main` should require a pull request, require the `tests` check, and block force
-pushes and deletions. The release pull request is opened by a person from the
-link the workflow produces, precisely so that its checks run and a required
-check is satisfiable.
+`main` should require a pull request, require the `commitlint`, `tests` and
+`Build image` checks, and block force pushes and deletions. Requiring the build
+matters because releases promote rather than rebuild: a merge with no image
+behind it cannot be released. `tests` and `Build image` report `skipped` on a
+pull request that changes no code, which satisfies them.
 
 Add the ruleset in Settings, Rules, Rulesets, or from the command line:
 
@@ -110,12 +137,13 @@ gh api --method POST repos/Niecke/uptime/rulesets --input - <<'JSON'
     { "type": "required_status_checks",
       "parameters": {
         "strict_required_status_checks_policy": false,
-        "required_status_checks": [ { "context": "tests" } ]
+        "required_status_checks": [
+          { "context": "commitlint" },
+          { "context": "tests" },
+          { "context": "Build image" }
+        ]
       } }
   ]
 }
 JSON
 ```
-
-`dev` stays unprotected. The release workflow writes the next `VERSION` to it
-directly, and a rule requiring pull requests there would block that.

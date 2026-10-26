@@ -1,0 +1,112 @@
+name: Promote image
+
+# The image was already built and tested on the pull request. Merging does not
+# change its contents, so this only adds a tag — no rebuild, and the digest the
+# suite passed on is exactly the digest that gets released.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      source_tag:
+        description: "CI tag to promote (ci-<7-char head sha>)"
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: promote-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GAR: europe-west3-docker.pkg.dev/niecke-it/niecke-it/uptime
+
+jobs:
+  promote:
+    name: Retag CI image
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The merge commit's parents may be needed to find the PR head.
+          fetch-depth: 0
+
+      # The merge commit is a new sha, so main cannot name the CI image
+      # directly: it is tagged with the sha of the PR head that was tested.
+      - name: Find the tested image
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG_INPUT: ${{ inputs.source_tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -n "$SOURCE_TAG_INPUT" ]; then
+            if ! [[ "$SOURCE_TAG_INPUT" =~ ^ci-[0-9a-f]{7}$ ]]; then
+              echo "::error::source_tag must look like ci-<7-char sha>."
+              exit 1
+            fi
+            echo "tag=$SOURCE_TAG_INPUT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The endpoint can list several PRs for a commit: take the one
+          # whose merge produced this commit.
+          head="$(gh api "repos/$REPO/commits/$GITHUB_SHA/pulls" \
+            --jq '[.[] | select(.merged_at != null and .merge_commit_sha == env.GITHUB_SHA)][0].head.sha // empty')"
+          if [ -z "$head" ]; then
+            # Merge commits keep the PR head as their second parent, which
+            # covers a merge the API does not know a pull request for.
+            head="$(git rev-parse --verify --quiet "$GITHUB_SHA^2" || true)"
+          fi
+          if [ -z "$head" ]; then
+            echo "::error::No pull request or merge parent found for $GITHUB_SHA." \
+                 "Images are only built on pull requests — open a PR" \
+                 "instead of committing straight to main."
+            exit 1
+          fi
+          echo "Promoting the image built from $head"
+          echo "tag=ci-${head:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker europe-west3-docker.pkg.dev --quiet
+
+      # ci.yml only builds an image when code changed, so a pull request that
+      # touches just the README or compose.yml merges without ever producing a
+      # ci-<sha> tag. There is nothing to promote then.
+      #
+      # A build that genuinely failed cannot reach here: it is a required
+      # check, so the pull request would not have been mergeable.
+      - name: Check whether an image was built for this commit
+        id: image
+        env:
+          SOURCE_TAG: ${{ steps.source.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "$GAR:$SOURCE_TAG" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No image tagged \`$SOURCE_TAG\` — ci.yml skipped the build because no code changed. Nothing to promote." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # imagetools copies the manifest by digest: same bytes, extra tag.
+      - name: Tag with the main commit
+        if: steps.image.outputs.exists == 'true'
+        env:
+          SOURCE_TAG: ${{ steps.source.outputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="sha-${GITHUB_SHA:0:7}"
+          docker buildx imagetools create --tag "$GAR:$tag" "$GAR:$SOURCE_TAG"
+          digest="$(docker buildx imagetools inspect "$GAR:$tag" --format '{{.Manifest.Digest}}')"
+          echo "Promoted \`$SOURCE_TAG\` to \`$tag\`, digest \`$digest\`." >> "$GITHUB_STEP_SUMMARY"
