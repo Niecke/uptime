@@ -2,13 +2,13 @@ name: CI
 
 # The only place an image is ever built. A pull request runs the suite and, if
 # it passes, builds the image once and pushes it tagged with the head commit.
-# Merging to dev and releasing from main retag that exact digest, so the bytes
-# that were tested are the bytes that get deployed.
+# Merging to main (promote.yml) and releasing a tag (release.yml) retag that
+# exact digest, so the bytes that were tested are the bytes that get deployed.
 #
 # Only `pull_request`. Every push to a branch with an open pull request also
 # fires `synchronize` on the same commit, so a push trigger would run all of
-# this twice for one change. Pushes to dev and main are merges of commits that
-# were already tested here.
+# this twice for one change. A push to main is a merge of a commit that was
+# already tested here.
 on:
   pull_request:
   workflow_dispatch:
@@ -59,7 +59,7 @@ jobs:
           fi
 
   # For a pull request `github.sha` is the ephemeral merge commit, which no
-  # image may be tagged with: after the merge, dev and main look the image up by
+  # image may be tagged with: after the merge, promote.yml looks the image up by
   # the head sha that was tested.
   meta:
     name: Resolve build identity
@@ -68,14 +68,35 @@ jobs:
     outputs:
       commit: ${{ steps.id.outputs.commit }}
       tag: ${{ steps.id.outputs.tag }}
+      app_version: ${{ steps.id.outputs.app_version }}
     steps:
+      # The manifest as the PR head has it, not the merge commit: on the release
+      # pull request that is the version it is about to tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          sparse-checkout: .release-please-manifest.json
+          sparse-checkout-cone-mode: false
+
+      # Images are built once, on the pull request, and promotion only retags
+      # them — so the release pull request's image is the one that ships as that
+      # release, and it carries the plain X.Y.Z. Every other build reports
+      # `dev-<commit>`.
       - id: id
         env:
-          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_REF: ${{ github.head_ref }}
+          COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          echo "commit=$HEAD" >> "$GITHUB_OUTPUT"
-          echo "tag=ci-${HEAD:0:7}" >> "$GITHUB_OUTPUT"
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+          echo "tag=ci-${COMMIT:0:7}" >> "$GITHUB_OUTPUT"
+
+          case "$HEAD_REF" in
+            release-please--*) version="$(jq -r '."."' .release-please-manifest.json)" ;;
+            *) version="dev-${COMMIT:0:7}" ;;
+          esac
+          echo "app_version=$version" >> "$GITHUB_OUTPUT"
 
   tests:
     needs: changes
@@ -90,15 +111,6 @@ jobs:
           # Don't leave the GITHUB_TOKEN behind in .git/config, where any later step —
           # or anything a build script pulls in — could read it.
           persist-credentials: false
-          # Full history and tags: the version check below compares the VERSION
-          # file against the newest release tag.
-          fetch-depth: 0
-          fetch-tags: true
-
-      # Catches a malformed or stale VERSION on the pull request that introduced
-      # it, rather than half way through a release.
-      - name: Validate VERSION
-        run: .github/scripts/version.sh
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -149,26 +161,25 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker europe-west3-docker.pkg.dev --quiet
 
-      # The version compiled in is the one VERSION names, without the `-dev.N`
-      # suffix the pre-release tags carry. That is what lets a single build serve
-      # both: the digest promoted to `0.1.7` reports 0.1.7, because it was
-      # always going to be 0.1.7. The git hash is what tells two builds of the
-      # same version apart.
+      # The version compiled in comes from the meta job: the manifest version on
+      # the release pull request, `dev-<commit>` everywhere else. The digest
+      # promoted to `0.1.8` therefore reports 0.1.8, because it was always going
+      # to be 0.1.8. The git hash tells two builds of the same version apart.
       - name: Build and push
         env:
           COMMIT: ${{ needs.meta.outputs.commit }}
           TAG: ${{ needs.meta.outputs.tag }}
+          VERSION: ${{ needs.meta.outputs.app_version }}
         run: |
           set -euo pipefail
-          version="$(tr -d '[:space:]' < VERSION)"
           docker build \
             --build-arg BUILD_GIT_HASH="${COMMIT:0:7}" \
-            --build-arg BUILD_VERSION="$version" \
+            --build-arg BUILD_VERSION="$VERSION" \
             -t "$GAR:$TAG" .
           docker push "$GAR:$TAG"
 
           {
-            echo "Built \`$TAG\` from \`${COMMIT:0:7}\`, version \`$version\`."
+            echo "Built \`$TAG\` from \`${COMMIT:0:7}\`, version \`$VERSION\`."
             echo ""
             echo "Merging retags this digest. Nothing downstream rebuilds it."
           } >> "$GITHUB_STEP_SUMMARY"
