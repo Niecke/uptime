@@ -54,8 +54,10 @@ jobs:
             exit 0
           fi
 
+          # The endpoint can list several PRs for a commit: take the one
+          # whose merge produced this commit.
           head="$(gh api "repos/$REPO/commits/$GITHUB_SHA/pulls" \
-            --jq '.[0].head.sha // empty')"
+            --jq '[.[] | select(.merged_at != null and .merge_commit_sha == env.GITHUB_SHA)][0].head.sha // empty')"
           if [ -z "$head" ]; then
             # Merge commits keep the PR head as their second parent, which
             # covers a merge the API does not know a pull request for.
