@@ -27,7 +27,7 @@ RUN CGO_ENABLED=0 go build -mod=readonly -trimpath -o uptime \
 # distroless has no shell, so create /data here and copy it into the final image
 RUN mkdir /data && chown -R 65532:65532 /data
 
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:1c2c046bc09ed40fad370b599a0b1ae7987f55b01e247cf27a7c27cd97e5bbc7
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99
 
 ENV DB_PATH=/data/uptime.db
 
