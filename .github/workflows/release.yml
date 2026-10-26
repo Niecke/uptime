@@ -1,24 +1,18 @@
 name: Release
 
-# Cutting a release is one action: merge dev into main. Nothing is rebuilt and
-# nothing is retested. The image the pull request built and the suite passed on
-# is retagged with the release version, copied to Docker Hub, and the commit is
-# tagged with generated release notes. Then dev moves on to the next patch.
-#
-# It keys on the branch, not on a tag. A tag pushed from a laptop can therefore
-# no longer ship an unbuilt or untested revision, and the tag this job creates
-# does not trigger anything, so there is no loop.
-#
-# VERSION is the input. A push to main that leaves it alone — a documentation
-# fix, a revert — finds its tag already published and stops.
+# release-please tags vX.Y.Z when its release pull request merges. That merge is
+# the release decision; this workflow carries it out. It never builds: the image
+# was built once on the release pull request, tested there, and retagged
+# sha-<short> by promote.yml when it merged. Here it gets its version tags on
+# Artifact Registry and Docker Hub.
 on:
   push:
-    branches:
-      - main
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # write: editing the GitHub Release body.
+  contents: write
 
 # Releases are never cancelled: a half-moved set of registry tags is worse than
 # a queued run.
@@ -33,246 +27,164 @@ env:
 jobs:
   release:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      # write: creates the tag, the GitHub release, and the VERSION bump on dev.
-      contents: write
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # version.sh reads the release tags, and the image lookup may need the
-          # merge commit's parents.
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Resolve the version
-        id: v
-        run: .github/scripts/version.sh
-
-      # Being already tagged is the normal outcome for any push to main that is
-      # not a release, so it is a skip and not a failure.
-      - name: Decide whether there is a release to cut
-        id: gate
+      # The floating tags only ever move forward. Re-running the workflow for an
+      # older tag, or a patch cut for an older line, still gets its own X.Y.Z
+      # tag but must not drag `latest` back to it.
+      - name: Resolve the release
+        id: release
         env:
-          RELEASED: ${{ steps.v.outputs.released }}
-          FULL: ${{ steps.v.outputs.version }}
+          # A manual run has to be started on the tag ref; any other ref fails
+          # the vX.Y.Z check below.
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if [ "$RELEASED" = "true" ]; then
-            echo "go=false" >> "$GITHUB_OUTPUT"
-            echo "\`v$FULL\` is already released — nothing to do." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "go=true" >> "$GITHUB_OUTPUT"
+          version="${TAG#v}"
+          if ! [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::$TAG is not a vX.Y.Z tag."
+            exit 1
           fi
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
 
-      - name: Find the tested image
-        id: source
-        if: steps.gate.outputs.go == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          tag="$(.github/scripts/source-tag.sh)"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "Looking for $GAR:$tag"
+          commit="$(git rev-parse "refs/tags/$TAG^{commit}")"
+
+          newest() {
+            git tag --list "$1" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1
+          }
+          floating=""
+          [ "$(newest "v$major.$minor.*")" = "$TAG" ] && floating="$floating $major.$minor"
+          [ "$(newest "v$major.*")" = "$TAG" ] && floating="$floating $major"
+          [ "$(newest 'v*')" = "$TAG" ] && floating="$floating latest"
+          floating="${floating# }"
+
+          echo "Releasing $version from $commit; floating tags: ${floating:-none}"
+          {
+            echo "version=$version"
+            echo "commit=$commit"
+            echo "source=sha-${commit:0:7}"
+            echo "floating=$floating"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to GCP
-        if: steps.gate.outputs.go == 'true'
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Configure Docker for Artifact Registry
-        if: steps.gate.outputs.go == 'true'
         run: gcloud auth configure-docker europe-west3-docker.pkg.dev --quiet
 
       - name: Log in to Docker Hub
-        if: steps.gate.outputs.go == 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # A release with nothing built for it is a real problem, not a skip: the
-      # version is unreleased, so this merge was meant to ship something. It
-      # happens when a commit reaches main without a pull request, which leaves
-      # no tested image to promote.
-      - name: Check the image exists
-        if: steps.gate.outputs.go == 'true'
+      # promote.yml and release-please both run on the push of the release
+      # merge, and release-please's tag can start this workflow before promote
+      # has added sha-<short>. Wait for it, then fail — never build. A missing
+      # image means the release pull request skipped its build or promote
+      # failed; either way there is no tested image to release.
+      - name: Find the promoted image
+        id: image
         env:
-          SRC: ${{ steps.source.outputs.tag }}
-          FULL: ${{ steps.v.outputs.version }}
+          SOURCE: ${{ steps.release.outputs.source }}
+          COMMIT: ${{ steps.release.outputs.commit }}
         run: |
           set -euo pipefail
-          if ! docker buildx imagetools inspect "$GAR:$SRC" > /dev/null 2>&1; then
-            echo "::error::No image tagged $SRC for this merge, so v$FULL cannot be released." \
-                 "Images are built on pull requests — merge through one rather than pushing to main." >&2
-            exit 1
-          fi
+          deadline=$((SECONDS + 600))
+          until digest="$(docker buildx imagetools inspect "$GAR:$SOURCE" \
+                            --format '{{.Manifest.Digest}}' 2>/dev/null)"; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::$GAR:$SOURCE does not exist." \
+                   "Check the promote.yml run for $COMMIT and the CI build on" \
+                   "the release pull request. Nothing is built here." >&2
+              exit 1
+            fi
+            echo "waiting for $SOURCE"
+            sleep 15
+          done
+          echo "found $SOURCE at $digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-      # imagetools copies the manifest by digest: same bytes, extra tags. The
-      # digest released is the digest CI tested, and the version compiled into
-      # it is the one being tagged, because CI baked VERSION rather than the
-      # pre-release string.
+      # By digest, not by the sha- tag, so the bytes that were looked up are the
+      # bytes that get tagged. imagetools copies the manifest; the check after
+      # it holds both registries to that digest. The version compiled in is the
+      # one being released, because CI read it from the manifest on the release
+      # pull request.
       - name: Publish the release tags
-        id: publish
-        if: steps.gate.outputs.go == 'true'
         env:
-          SRC: ${{ steps.source.outputs.tag }}
-          FULL: ${{ steps.v.outputs.version }}
-          MINOR: ${{ steps.v.outputs.minor }}
-          MAJOR: ${{ steps.v.outputs.major }}
+          VERSION: ${{ steps.release.outputs.version }}
+          FLOATING: ${{ steps.release.outputs.floating }}
+          DIGEST: ${{ steps.image.outputs.digest }}
         run: |
           set -euo pipefail
+          for registry in "$GAR" "$HUB"; do
+            args=(--tag "$registry:$VERSION")
+            for tag in $FLOATING; do
+              args+=(--tag "$registry:$tag")
+            done
+            # Same call across registries: it copies the blobs into Docker Hub
+            # and pushes the identical manifest, so both serve one digest.
+            docker buildx imagetools create "${args[@]}" "$GAR@$DIGEST"
 
-          docker buildx imagetools create \
-            --tag "$GAR:$FULL" \
-            --tag "$GAR:$MINOR" \
-            --tag "$GAR:$MAJOR" \
-            --tag "$GAR:latest" \
-            "$GAR:$SRC"
+            for tag in "$VERSION" $FLOATING; do
+              got="$(docker buildx imagetools inspect "$registry:$tag" --format '{{.Manifest.Digest}}')"
+              if [ "$got" != "$DIGEST" ]; then
+                echo "::error::$registry:$tag is $got, expected $DIGEST." >&2
+                exit 1
+              fi
+            done
+          done
 
-          # Same call across registries: it copies the blobs into Docker Hub and
-          # pushes the identical manifest, so both registries serve one digest.
-          docker buildx imagetools create \
-            --tag "$HUB:$FULL" \
-            --tag "$HUB:$MINOR" \
-            --tag "$HUB:$MAJOR" \
-            --tag "$HUB:latest" \
-            "$GAR:$SRC"
+          echo "Promoted \`$DIGEST\` to \`$VERSION\` on both registries. Also tagged: ${FLOATING:-none}." >> "$GITHUB_STEP_SUMMARY"
 
-          gar_digest="$(docker buildx imagetools inspect "$GAR:$FULL" --format '{{.Manifest.Digest}}')"
-          hub_digest="$(docker buildx imagetools inspect "$HUB:$FULL" --format '{{.Manifest.Digest}}')"
-          if [ "$gar_digest" != "$hub_digest" ]; then
-            echo "::error::Artifact Registry has $gar_digest but Docker Hub has $hub_digest." >&2
-            exit 1
-          fi
+      # release-please creates the Release and the tag in one call, so it should
+      # exist already; the retry covers GitHub's eventual consistency. Everything
+      # from the marker down is this workflow's, which keeps a re-run idempotent.
+      - name: Attach the image digest to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.release.outputs.version }}
+          COMMIT: ${{ steps.release.outputs.commit }}
+          FLOATING: ${{ steps.release.outputs.floating }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5 6; do
+            if body="$(gh release view "$TAG" --json body --jq .body 2>/dev/null)"; then
+              break
+            fi
+            if [ "$attempt" -eq 6 ]; then
+              echo "::error::No GitHub Release for $TAG." >&2
+              exit 1
+            fi
+            sleep 10
+          done
 
-          # Both registries serve this digest, so it is what compose.yml pins.
-          echo "digest=$gar_digest" >> "$GITHUB_OUTPUT"
-
+          marker='<!-- release-images -->'
+          notes="$RUNNER_TEMP/notes.md"
           {
-            echo "Promoted \`$SRC\` to \`$FULL\`, \`$MINOR\`, \`$MAJOR\` and \`latest\` on both registries."
-            echo ""
-            echo "Digest \`$gar_digest\`."
-          } >> "$GITHUB_STEP_SUMMARY"
+            printf '%s\n' "$body" | sed "/^$marker\$/,\$d"
+            echo "$marker"
+            echo "## Images"
+            echo
+            echo "Built and tested on the release pull request, retagged here — not rebuilt."
+            echo "Commit \`$COMMIT\`. Also tagged: ${FLOATING:-none (a newer release exists)}."
+            echo
+            echo "| Image | Digest |"
+            echo "|---|---|"
+            echo "| \`$GAR:$VERSION\` | \`$DIGEST\` |"
+            echo "| \`$HUB:$VERSION\` | \`$DIGEST\` |"
+          } > "$notes"
 
-      # After the registries, so a failed promotion leaves no tag claiming a
-      # release that was never published. --target creates the tag on this
-      # commit, and --generate-notes writes the changelog from the merged pull
-      # requests.
-      - name: Tag and publish the release
-        if: steps.gate.outputs.go == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          FULL: ${{ steps.v.outputs.version }}
-        run: |
-          set -euo pipefail
-          gh release create "v$FULL" \
-            --target "$GITHUB_SHA" \
-            --title "v$FULL" \
-            --generate-notes
-          echo "Released [v$FULL](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/v$FULL)." \
-            >> "$GITHUB_STEP_SUMMARY"
-
-      # compose.yml records what is deployed, and the release is the moment that
-      # value is known: the tag was just published and the digest was just
-      # verified identical on both registries. Renovate used to raise this as a
-      # pull request one cycle later, which is a review of a line the release had
-      # already decided.
-      #
-      # Not fatal: the release is published by this point, and a stale pin is a
-      # warning, not a broken release.
-      - name: Pin the released image in compose.yml on dev
-        if: steps.gate.outputs.go == 'true'
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          FULL: ${{ steps.v.outputs.version }}
-          DIGEST: ${{ steps.publish.outputs.digest }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "$DIGEST" ]; then
-            echo "::warning::No digest from the publish step — left compose.yml alone."
-            exit 0
-          fi
-
-          current_b64="$(gh api "repos/$GITHUB_REPOSITORY/contents/compose.yml?ref=dev" --jq .content 2>/dev/null || true)"
-          if [ -z "$current_b64" ]; then
-            echo "No compose.yml on dev — skipped the pin." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          tmp="$(mktemp -d)"
-          printf '%s' "$current_b64" | base64 -d > "$tmp/before.yml"
-          cp "$tmp/before.yml" "$tmp/after.yml"
-
-          ref="niecke11/uptime:$FULL@$DIGEST"
-          # Only the image reference changes. Indentation, comments and every
-          # other service in the file are left exactly as they are.
-          sed -E -i "s|^([[:space:]]*image:[[:space:]]*)niecke11/uptime:.*$|\1$ref|" "$tmp/after.yml"
-
-          # A file that does not contain the new reference means the line was
-          # renamed or removed, and this should not guess at where it went.
-          if ! grep -qF -- "$ref" "$tmp/after.yml"; then
-            echo "::warning::No niecke11/uptime image line in compose.yml — left it alone."
-            exit 0
-          fi
-
-          if cmp -s "$tmp/before.yml" "$tmp/after.yml"; then
-            echo "compose.yml on dev already pins \`$ref\`." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/compose.yml?ref=dev" --jq .sha)"
-          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/compose.yml" \
-            -f message="Deploy $FULL" \
-            -f content="$(base64 -w0 "$tmp/after.yml")" \
-            -f branch=dev \
-            -f sha="$sha" > /dev/null
-
-          echo "compose.yml on dev now pins \`$ref\`." >> "$GITHUB_STEP_SUMMARY"
-
-      # Opens the next cycle so dev never sits on an already-released version,
-      # which is the state the dev workflow refuses to publish. Written through
-      # the contents API rather than a git push, so no token has to be left
-      # behind in .git/config.
-      #
-      # Not fatal: the release itself is already published by this point, and a
-      # protected dev branch or a hand-raised VERSION is a warning, not a broken
-      # release.
-      - name: Start the next cycle on dev
-        if: steps.gate.outputs.go == 'true'
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          FULL: ${{ steps.v.outputs.version }}
-        run: |
-          set -euo pipefail
-          IFS=. read -r maj min pat <<< "$FULL"
-          next="$maj.$min.$((pat + 1))"
-
-          current_b64="$(gh api "repos/$GITHUB_REPOSITORY/contents/VERSION?ref=dev" --jq .content 2>/dev/null || true)"
-          if [ -z "$current_b64" ]; then
-            echo "No VERSION on dev — skipped the bump." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          current="$(printf '%s' "$current_b64" | base64 -d | tr -d '[:space:]')"
-
-          # dev may already have been raised past the next patch by hand, for a
-          # planned minor or major. Leave that decision alone.
-          highest="$(printf '%s\n%s\n' "$current" "$next" | sort -V | tail -n1)"
-          if [ "$highest" = "$current" ] && [ "$current" != "$next" ]; then
-            echo "dev is already on \`$current\` — left as is." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/VERSION?ref=dev" --jq .sha)"
-          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/VERSION" \
-            -f message="Start the $next development cycle" \
-            -f content="$(printf '%s\n' "$next" | base64 -w0)" \
-            -f branch=dev \
-            -f sha="$sha" > /dev/null
-          echo "dev now targets \`$next\`." >> "$GITHUB_STEP_SUMMARY"
+          gh release edit "$TAG" --notes-file "$notes"
+          cat "$notes" >> "$GITHUB_STEP_SUMMARY"

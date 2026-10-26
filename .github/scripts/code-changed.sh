@@ -19,10 +19,10 @@ base="${1:-}"
 head="${2:-}"
 event="${3:-push}"
 
-# Everything the build reads. VERSION is here because it decides the tags a
-# release publishes, and .github/ because a change to the pipeline should be
-# exercised by the pipeline.
-pattern='^(cmd/|internal/|go\.mod$|go\.sum$|Dockerfile$|\.dockerignore$|config\.yml\.example$|VERSION$|\.github/(workflows|scripts)/)'
+# Everything the build reads. The release manifest is here because it decides the
+# version baked into the release pull request's image, and .github/ because a
+# change to the pipeline should be exercised by the pipeline.
+pattern='^(cmd/|internal/|go\.mod$|go\.sum$|Dockerfile$|\.dockerignore$|config\.yml\.example$|\.release-please-manifest\.json$|\.github/(workflows|scripts)/)'
 
 # The all-zero sha is what a push event carries for a branch that did not exist
 # before, and there is nothing to diff against.
