@@ -32,6 +32,16 @@ type APIHandler struct {
 
 func SetupAPI(database *sql.DB, broadcaster sse.Broadcaster, config models.Config) {
 	h := APIHandler{database: database, broadcaster: broadcaster, config: config}
+	r := newRouter(&h)
+
+	slog.Info("API started on http://0.0.0.0:3333")
+	err := http.ListenAndServe(":3333", r)
+	if err != nil {
+		slog.Error("There was an error starting the api", "error", err.Error())
+	}
+}
+
+func newRouter(h *APIHandler) http.Handler {
 	r := chi.NewRouter()
 
 	// TODO: CORS is disabled for now
@@ -41,8 +51,8 @@ func SetupAPI(database *sql.DB, broadcaster sse.Broadcaster, config models.Confi
 	}))
 	r.Use(slogLogger)
 
-	r.Mount("/endpoints", endpointRouter(&h))
-	r.Mount("/events", eventRouter(&h))
+	r.Mount("/endpoints", endpointRouter(h))
+	r.Mount("/events", eventRouter(h))
 	r.Get("/version", h.version)
 
 	// TODO: move to config setup
@@ -60,11 +70,7 @@ func SetupAPI(database *sql.DB, broadcaster sse.Broadcaster, config models.Confi
 		http.FileServer(fileSystem).ServeHTTP(w, r)
 	})
 
-	slog.Info("API started on http://0.0.0.0:3333")
-	err := http.ListenAndServe(":3333", r)
-	if err != nil {
-		slog.Error("There was an error starting the api", "error", err.Error())
-	}
+	return r
 }
 
 func endpointRouter(h *APIHandler) chi.Router {
