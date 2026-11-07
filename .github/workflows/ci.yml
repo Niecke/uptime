@@ -58,6 +58,26 @@ jobs:
             echo "Nothing that reaches the binary or the image changed — tests, build and release are skipped." >> "$GITHUB_STEP_SUMMARY"
           fi
 
+  # Not gated on `changes`: code-changed.sh deliberately treats the Caddyfile as
+  # non-code, and an invalid one must never reach a release. Cheap, so it always runs.
+  caddyfile:
+    name: Validate Caddyfile
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The image compose.yml deploys, tag and digest, so Renovate bumps are validated too.
+      - name: caddy validate
+        run: |
+          set -euo pipefail
+          image="$(grep -oE 'caddy:[^[:space:]]+@sha256:[0-9a-f]{64}' compose.yml)"
+          echo "Validating with $image" >> "$GITHUB_STEP_SUMMARY"
+          docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" "$image" \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
   # For a pull request `github.sha` is the ephemeral merge commit, which no
   # image may be tagged with: after the merge, promote.yml looks the image up by
   # the head sha that was tested.

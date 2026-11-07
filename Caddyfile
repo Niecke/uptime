@@ -2,10 +2,9 @@ uptime.niecke-it.de {
     # Private dashboard: keep it out of search engines. robots.txt deliberately allows
     # crawling, otherwise crawlers never see this header (see README).
     header X-Robots-Tag "noindex, nofollow"
-    encode zstd gzip {
-        match {
-            not path /events
-        }
-    }
+    # Compression buffers the SSE stream, so /events stays uncompressed. encode's
+    # match block only takes response matchers, hence a request matcher as argument.
+    @notEvents not path /events
+    encode @notEvents zstd gzip
     reverse_proxy uptime:3333
 }
