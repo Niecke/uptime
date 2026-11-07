@@ -1,4 +1,7 @@
 uptime.niecke-it.de {
+    # Private dashboard: keep it out of search engines. robots.txt deliberately allows
+    # crawling, otherwise crawlers never see this header (see README).
+    header X-Robots-Tag "noindex, nofollow"
     encode zstd gzip {
         match {
             not path /events

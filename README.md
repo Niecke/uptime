@@ -33,6 +33,25 @@ When running with DEV=true, the HTML content is reloaded from disk.
 DEV=true go run cmd/main.go -config=./config.yml
 ```
 
+## Search engines
+
+The dashboard is private and must not show up in search engines. Three parts work together:
+
+- `Caddyfile` sets `X-Robots-Tag: noindex, nofollow` on every response of the
+  `uptime.niecke-it.de` site (dashboard, API, assets, `/events`).
+- `internal/api/web/index.html` has `<meta name="robots" content="noindex, nofollow">` as a second signal.
+- `/robots.txt` is served by the app from `internal/api/web/robots.txt`. It intentionally has an
+  empty `Disallow:`: a crawler that is blocked by robots.txt never sees the noindex, so URLs it
+  already knows would stay indexed (see Google Search Central, robots meta tag docs).
+
+Manual checks after a deploy (the Caddyfile has to be copied to the server and Caddy reloaded):
+
+```bash
+curl -sI https://uptime.niecke-it.de/ | grep -i x-robots-tag     # X-Robots-Tag: noindex, nofollow
+curl -s -o /dev/null -w '%{http_code}' https://uptime.niecke-it.de/robots.txt   # 200
+curl -s https://uptime.niecke-it.de/robots.txt
+```
+
 ## Branches and releases
 
 Development is trunk-based: branches start from `main` and come back to `main`

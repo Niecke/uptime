@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -86,4 +87,39 @@ func newTestHandler() APIHandler {
 	database := db.SetupDatabaseWithPath(":memory:")
 	b := sse.NewBroadcaster()
 	return APIHandler{database: database, broadcaster: b}
+}
+
+func TestRobotsTxt(t *testing.T) {
+	t.Setenv("DEV", "")
+	h := newTestHandler()
+	w := httptest.NewRecorder()
+	newRouter(&h).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/robots.txt", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Errorf("expected text/plain content type, got %q", ct)
+	}
+	body := w.Body.String()
+	if body != "User-agent: *\nDisallow:\n" {
+		t.Errorf("unexpected robots.txt body %q", body)
+	}
+	if strings.Contains(body, "Disallow: /") {
+		t.Errorf("robots.txt must not block crawling, got %q", body)
+	}
+}
+
+func TestIndexHasRobotsMeta(t *testing.T) {
+	t.Setenv("DEV", "")
+	h := newTestHandler()
+	w := httptest.NewRecorder()
+	newRouter(&h).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), `<meta name="robots" content="noindex, nofollow">`) {
+		t.Error("index.html is missing the robots meta tag")
+	}
 }
