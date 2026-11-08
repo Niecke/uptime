@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"encoding/json"
@@ -42,6 +43,17 @@ func SetupDatabaseWithPath(path string) *sql.DB {
 	db.Exec("PRAGMA busy_timeout=5000") // wait rather than fail on lock contention
 	db.SetMaxOpenConns(4)
 
+	// must happen before the migrations so their tables are created in an
+	// incremental database; an existing file is converted with one VACUUM
+	start := time.Now()
+	converted, err := ensureIncrementalAutoVacuum(db)
+	if err != nil {
+		panic(err)
+	}
+	if converted {
+		slog.Info("Converted database to incremental auto_vacuum", "duration_ms", time.Since(start).Milliseconds())
+	}
+
 	goose.SetBaseFS(embedMigrations)
 
 	if err := goose.SetDialect("sqlite3"); err != nil {
@@ -55,33 +67,138 @@ func SetupDatabaseWithPath(path string) *sql.DB {
 	return db
 }
 
-func CompactDatabase(database *sql.DB, retentionDays int) {
+const autoVacuumIncremental = 2
+
+// incrementalVacuumPages bounds how many free pages one retention run hands
+// back to the filesystem (about 8 MB at 4 KiB pages). Whatever is left is
+// picked up by the next run. It must stay > 0: incremental_vacuum(0) frees
+// the whole freelist.
+const incrementalVacuumPages = 2000
+
+// ensureIncrementalAutoVacuum switches the database to auto_vacuum=INCREMENTAL.
+// For a file that is not yet incremental this needs one full VACUUM. PRAGMA
+// state is per connection and VACUUM cannot run inside a transaction, so all
+// statements run on one pinned connection. It returns true if it converted.
+func ensureIncrementalAutoVacuum(db *sql.DB) (converted bool, err error) {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return false, fmt.Errorf("get connection: %w", err)
+	}
+	defer conn.Close()
+
+	var mode int
+	if err := conn.QueryRowContext(ctx, "PRAGMA auto_vacuum").Scan(&mode); err != nil {
+		return false, fmt.Errorf("read auto_vacuum: %w", err)
+	}
+	if mode == autoVacuumIncremental {
+		return false, nil
+	}
+
+	if _, err := conn.ExecContext(ctx, "PRAGMA auto_vacuum = INCREMENTAL"); err != nil {
+		return false, fmt.Errorf("set auto_vacuum: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, "VACUUM"); err != nil {
+		return false, fmt.Errorf("vacuum: %w", err)
+	}
+	if err := conn.QueryRowContext(ctx, "PRAGMA auto_vacuum").Scan(&mode); err != nil {
+		return false, fmt.Errorf("read auto_vacuum: %w", err)
+	}
+	if mode != autoVacuumIncremental {
+		return false, fmt.Errorf("auto_vacuum is %d after VACUUM, want %d", mode, autoVacuumIncremental)
+	}
+	return true, nil
+}
+
+type retentionStats struct {
+	Deleted        int64
+	FreelistBefore int64 // after the DELETE, before the incremental vacuum
+	FreelistAfter  int64
+	PagesFreed     int64
+	SizeBytes      int64 // page_count * page_size after the vacuum
+}
+
+// runRetention deletes old check results and gives the freed pages back.
+func runRetention(database *sql.DB, retentionDays int) (retentionStats, error) {
+	var stats retentionStats
 	retentionDaysString := fmt.Sprintf("-%d days", retentionDays)
+
+	res, err := database.Exec(`
+		DELETE FROM check_results
+		WHERE checked_at < datetime('now', ?)
+		`, retentionDaysString)
+	if err != nil {
+		return stats, fmt.Errorf("delete old records: %w", err)
+	}
+	if stats.Deleted, err = res.RowsAffected(); err != nil {
+		return stats, fmt.Errorf("count deleted records: %w", err)
+	}
+
+	ctx := context.Background()
+	conn, err := database.Conn(ctx)
+	if err != nil {
+		return stats, fmt.Errorf("get connection: %w", err)
+	}
+	defer conn.Close()
+
+	if err := conn.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&stats.FreelistBefore); err != nil {
+		return stats, fmt.Errorf("read freelist_count: %w", err)
+	}
+
+	// Query and drain instead of Exec: the pragma works one page per step and
+	// the driver must be stepped until it is done.
+	rows, err := conn.QueryContext(ctx, fmt.Sprintf("PRAGMA incremental_vacuum(%d)", incrementalVacuumPages))
+	if err != nil {
+		return stats, fmt.Errorf("incremental vacuum: %w", err)
+	}
+	for rows.Next() {
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return stats, fmt.Errorf("incremental vacuum: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return stats, fmt.Errorf("incremental vacuum: %w", err)
+	}
+
+	var pageCount, pageSize int64
+	if err := conn.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&stats.FreelistAfter); err != nil {
+		return stats, fmt.Errorf("read freelist_count: %w", err)
+	}
+	if err := conn.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount); err != nil {
+		return stats, fmt.Errorf("read page_count: %w", err)
+	}
+	if err := conn.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize); err != nil {
+		return stats, fmt.Errorf("read page_size: %w", err)
+	}
+	stats.PagesFreed = stats.FreelistBefore - stats.FreelistAfter
+	stats.SizeBytes = pageCount * pageSize
+
+	// last, so the truncation reaches the main file
+	if _, err := conn.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		slog.Error("WAL checkpoint failed", "error", err)
+	} else {
+		slog.Error("WAL checkpoint completed")
+	}
+
+	return stats, nil
+}
+
+func CompactDatabase(database *sql.DB, retentionDays int) {
 	ticker := time.NewTicker(30 * time.Minute)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		// first delete old records
-		if res, err := database.Exec(`
-			DELETE FROM check_results
-			WHERE checked_at < datetime('now', ?)
-			`, retentionDaysString); err != nil {
-
-			slog.Error("Error while deleting old records", "error", err)
-		} else {
-			if deletedRecords, err := res.RowsAffected(); err != nil {
-				slog.Error("Error while getting delete records count", "error", err)
-			} else {
-				slog.Info("Deleted old records from check_results", "count", deletedRecords)
-			}
+		stats, err := runRetention(database, retentionDays)
+		if err != nil {
+			slog.Error("Error during retention cleanup", "error", err)
+			continue
 		}
-
-		// second run truncation
-		if _, err := database.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
-			slog.Error("WAL checkpoint failed", "error", err)
-		} else {
-			slog.Error("WAL checkpoint completed")
-		}
+		slog.Info("Retention cleanup finished",
+			"deleted", stats.Deleted,
+			"pages_freed", stats.PagesFreed,
+			"freelist_pages", stats.FreelistAfter,
+			"db_size_bytes", stats.SizeBytes)
 	}
 }
 
