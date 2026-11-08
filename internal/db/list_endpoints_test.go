@@ -50,7 +50,7 @@ const legacyListEndpointsQuery = `
 // cycles 200/500/0 and duration_ms varies.
 func seedChecks(tb testing.TB, database *sql.DB, endpointID int64, n int, offsetSeconds int) {
 	tb.Helper()
-	_, err := database.Exec(`+"`"+`
+	_, err := database.Exec(`
 		WITH RECURSIVE k(n) AS (
 			SELECT 0
 			UNION ALL
@@ -61,7 +61,7 @@ func seedChecks(tb testing.TB, database *sql.DB, endpointID int64, n int, offset
 		       strftime('%Y-%m-%d %H:%M:%S', 'now', '-' || (n * 30 + ?) || ' seconds'),
 		       CASE n % 3 WHEN 0 THEN 200 WHEN 1 THEN 500 ELSE 0 END,
 		       10 + n % 97
-		FROM k`+"`"+`, n, endpointID, offsetSeconds)
+		FROM k`, n, endpointID, offsetSeconds)
 	if err != nil {
 		tb.Fatalf("seedChecks(endpoint %d): %v", endpointID, err)
 	}
@@ -149,7 +149,7 @@ func TestListEndpointsMatchesLegacyQuery(t *testing.T) {
 
 	// CheckedAt must be the seeded latest timestamp (check k=0 of endpoint a)
 	var latest string
-	if err := database.QueryRow(`+"`"+`SELECT MAX(checked_at) FROM check_results WHERE endpoint_id = ?`+"`"+`, ids[0]).Scan(&latest); err != nil {
+	if err := database.QueryRow(`SELECT MAX(checked_at) FROM check_results WHERE endpoint_id = ?`, ids[0]).Scan(&latest); err != nil {
 		t.Fatalf("latest: %v", err)
 	}
 	wantAt, err := time.Parse(checkedAtLayout, latest)
@@ -174,8 +174,8 @@ func TestListEndpointsLatestTieBreak(t *testing.T) {
 		t.Fatalf("InsertEndpoint: %v", err)
 	}
 	for _, status := range []int{200, 500} {
-		if _, err := database.Exec(`+"`"+`INSERT INTO check_results (endpoint_id, checked_at, status_code, duration_ms)
-			VALUES (?, '2026-01-01 12:00:00', ?, 5)`+"`"+`, id, status); err != nil {
+		if _, err := database.Exec(`INSERT INTO check_results (endpoint_id, checked_at, status_code, duration_ms)
+			VALUES (?, '2026-01-01 12:00:00', ?, 5)`, id, status); err != nil {
 			t.Fatalf("insert check: %v", err)
 		}
 	}
