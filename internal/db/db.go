@@ -136,41 +136,47 @@ func InsertCheckResult(db *sql.DB, endpointID int64, result models.HealthResult)
 	return nil
 }
 
+// listEndpointsQuery is the query behind ListEndpoints. It is a constant so the
+// plan test and the benchmark run exactly what the function runs.
+const listEndpointsQuery = `
+	WITH latest AS (
+		-- one index seek per endpoint instead of scanning the whole index:
+		-- the subquery walks idx_check_results_history backwards and stops at
+		-- the first row; id DESC breaks ties so each endpoint yields one row
+		SELECT cr.endpoint_id, cr.checked_at, cr.status_code, cr.duration_ms
+		FROM endpoints le
+		JOIN check_results cr ON cr.id = (
+			SELECT c2.id FROM check_results c2
+			WHERE c2.endpoint_id = le.id
+			ORDER BY c2.checked_at DESC, c2.id DESC
+			LIMIT 1)
+	),
+	stats AS (
+		SELECT endpoint_id,
+		       COUNT(*) AS total,
+		       SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN 1 ELSE 0 END) AS success
+		FROM check_results
+		WHERE checked_at > datetime('now', ?)
+		GROUP BY endpoint_id
+	)
+	SELECT e.id, e.url,
+	       COALESCE(l.status_code, 0),
+	       CAST(l.checked_at AS TEXT),
+	       COALESCE(l.duration_ms, 0),
+	       COALESCE(s.success, 0),
+	       COALESCE(s.total, 0)
+	FROM endpoints e
+	-- LEFT so a configured endpoint that has not been checked yet still shows up
+	LEFT JOIN latest l ON l.endpoint_id = e.id
+	LEFT JOIN stats  s ON s.endpoint_id = e.id
+	ORDER BY e.id
+`
+
 func ListEndpoints(tracingLog bool, db *sql.DB, retentionDays int) ([]models.EndpointStatus, error) {
 	retentionDaysString := fmt.Sprintf("-%d days", retentionDays)
 	slog.Debug("ListEndpoints called", "retentionDays", retentionDays, "retentionDaysString", retentionDaysString)
 	tracing_start := time.Now()
-	result, err := db.Query(`
-		WITH latest AS (
-			-- one row per endpoint: SQLite takes the bare columns from the same
-			-- row that produced MAX(), so ties cannot fan out into duplicates
-			SELECT endpoint_id,
-			       MAX(checked_at) AS checked_at,
-			       status_code,
-			       duration_ms
-			FROM check_results
-			GROUP BY endpoint_id
-		),
-		stats AS (
-			SELECT endpoint_id,
-			       COUNT(*) AS total,
-			       SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN 1 ELSE 0 END) AS success
-			FROM check_results
-			WHERE checked_at > datetime('now', ?)
-			GROUP BY endpoint_id
-		)
-		SELECT e.id, e.url,
-		       COALESCE(l.status_code, 0),
-		       l.checked_at,
-		       COALESCE(l.duration_ms, 0),
-		       COALESCE(s.success, 0),
-		       COALESCE(s.total, 0)
-		FROM endpoints e
-		-- LEFT so a configured endpoint that has not been checked yet still shows up
-		LEFT JOIN latest l ON l.endpoint_id = e.id
-		LEFT JOIN stats  s ON s.endpoint_id = e.id
-		ORDER BY e.id
-	`, retentionDaysString)
+	result, err := db.Query(listEndpointsQuery, retentionDaysString)
 
 	tracing_end := time.Now()
 	tracing_duration := tracing_end.Sub(tracing_start)
@@ -188,9 +194,10 @@ func ListEndpoints(tracingLog bool, db *sql.DB, retentionDays int) ([]models.End
 	for result.Next() {
 		var success int64
 		var total int64
-		// MAX(checked_at) comes out of the CTE without the column's declared
-		// DATETIME type, so the driver hands it over as a string and it has to
-		// be parsed here. NULL means the endpoint has never been checked.
+		// checked_at is selected with CAST(... AS TEXT): read straight from the
+		// DATETIME column the driver would return a time.Time, which database/sql
+		// would format as RFC 3339 and checkedAtLayout could not parse. The CAST
+		// keeps the stored text. NULL means the endpoint has never been checked.
 		var checkedAt sql.NullString
 		var t models.EndpointStatus
 		if err := result.Scan(&t.ID, &t.URL, &t.StatusCode, &checkedAt, &t.Duration, &success, &total); err != nil {
