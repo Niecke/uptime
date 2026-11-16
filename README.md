@@ -50,7 +50,13 @@ Manual checks after a deploy (the Caddyfile has to be copied to the server and C
 curl -sI https://uptime.niecke-it.de/ | grep -i x-robots-tag     # X-Robots-Tag: noindex, nofollow
 curl -s -o /dev/null -w '%{http_code}' https://uptime.niecke-it.de/robots.txt   # 200
 curl -s https://uptime.niecke-it.de/robots.txt
+curl -sI -H 'Accept-Encoding: gzip' https://uptime.niecke-it.de/ | grep -i content-encoding   # Content-Encoding: gzip (or zstd)
+# /events is a stream that never ends, hence --max-time; GET because the router has no HEAD route
+curl -s -D - -o /dev/null --max-time 3 -H 'Accept-Encoding: gzip' https://uptime.niecke-it.de/events | grep -i -e content-encoding -e x-robots-tag   # only X-Robots-Tag, no Content-Encoding
 ```
+
+`/events` is excluded from compression because compression buffers the Server-Sent-Events stream.
+CI validates the `Caddyfile` with `caddy validate` on every pull request, in the Caddy image `compose.yml` uses.
 
 ## Branches and releases
 
