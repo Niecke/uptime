@@ -28,6 +28,39 @@
         "patch"
       ],
       "groupName": "go patch updates"
+    },
+    {
+      "description": "Bump the go directive in go.mod to each new Go release. Renovate's default treats it as a minimum and never proposes it. CI's setup-go reads go.mod, so it must follow the golang image. See https://docs.renovatebot.com/modules/manager/gomod/",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchDepNames": [
+        "go"
+      ],
+      "matchDepTypes": [
+        "golang"
+      ],
+      "rangeStrategy": "bump"
+    },
+    {
+      "description": "One PR per Go release: the golang build image and the go/toolchain directives in go.mod move together. Must stay below 'go patch updates' so this groupName wins for the go directive.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "golang"
+      ],
+      "groupName": "go toolchain"
+    },
+    {
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchDepTypes": [
+        "golang",
+        "toolchain"
+      ],
+      "groupName": "go toolchain"
     }
   ],
   "vulnerabilityAlerts": {
